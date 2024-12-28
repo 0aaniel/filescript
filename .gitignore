@@ -1,0 +1,12 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.dll
+*.exe
+
+# Node
+node_modules/
+dist/
+build/
