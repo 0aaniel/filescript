@@ -91,6 +91,7 @@ namespace Filescript.Services
             _logger.LogInformation("DirectoryService: Current directory changed to '{ResolvedPath}'.", resolvedPath);
         }
 
+
         public async Task RemoveDirectoryAsync(string directoryName, string path)
         {
             _logger.LogInformation("DirectoryService: Attempting to remove directory '{DirectoryName}' at path '{Path}'.", directoryName, path);
