@@ -1,7 +1,7 @@
+using Filescript.Backend.Exceptions;
 using Filescript.Backend.Models;
 using Filescript.Backend.Models.RequestModels;
 using Filescript.Backend.Services;
-using Filescript.Exceptions;
 using Filescript.Models.RequestModels;
 using Filescript.Models.Requests;
 using Microsoft.AspNetCore.Mvc;
@@ -11,7 +11,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 
-namespace Filescript.Contrllers {
+namespace Filescript.Backend.Controllers {
     
     /// <summary>
     /// Controller responsible for handling directory-related operations within the container.
@@ -21,6 +21,7 @@ namespace Filescript.Contrllers {
     public class DirectoryController : ControllerBase {
 
         private readonly IDirectoryService _directoryService;
+
         private readonly ILogger<DirectoryController> _logger;
 
         /// <summary>
@@ -30,6 +31,7 @@ namespace Filescript.Contrllers {
         /// <param name="logger">Logger instance for logging.</param>
         public DirectoryController(IDirectoryService directoryService, ILogger<DirectoryController> logger) {
             _directoryService = directoryService ?? throw new ArgumentNullException(nameof(directoryService));
+            // _historyService = historyService ?? throw new ArgumentNullException(nameof(historyService));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 

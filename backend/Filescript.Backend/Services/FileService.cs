@@ -1,6 +1,7 @@
 using System.IO.Enumeration;
 using System.Text.Json;
 using Filescript.Backend.Models;
+using Filescript.Services;
 using Filescript.Utilities;
 
 namespace Filescript.Backend.Services {
@@ -14,6 +15,7 @@ namespace Filescript.Backend.Services {
         private readonly IResiliencyService _resiliencyService;
         private readonly ContainerMetadata _metadata;
 
+
         /// <summary>
         /// Initializes a new instance of the <see cref="FileService"/> class.
         /// </summary>
@@ -25,14 +27,17 @@ namespace Filescript.Backend.Services {
             ILogger<FileService> logger,
             FileIOHelper fileIOHelper,
             IDeduplicationService deduplicationService,
-            IResiliencyService resiliencyService)
+            IResiliencyService resiliencyService
+            /*UndoRedoService undoRedoService */)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _fileIOHelper = fileIOHelper ?? throw new ArgumentNullException(nameof(fileIOHelper));
             _deduplicationService = deduplicationService ?? throw new ArgumentNullException(nameof(deduplicationService));
             _resiliencyService = resiliencyService ?? throw new ArgumentNullException(nameof(resiliencyService));
+            //_undoRedoService = undoRedoService ?? throw new ArgumentNullException(nameof(undoRedoService));
 
-            _metadata = LoadMetadata();
+
+            _metadata = _metadata.LoadMetadata();
         }
 
         /// <inheritdoc />
@@ -49,6 +54,8 @@ namespace Filescript.Backend.Services {
                 long fileSize = fileInfo.Length;
                 int blockSize = _fileIOHelper.BlockSize;
                 int totalBlocks = (int)Math.Ceiling((double)fileSize / blockSize);
+                // _historyService.PushOperation(new FileOperation(fullPath, FileOperationType.Create));
+
 
                 using (FileStream fs = new FileStream(sourcePath, FileMode.Open, FileAccess.Read)) {
                     byte[] buffer = new byte[blockSize];
@@ -68,7 +75,7 @@ namespace Filescript.Backend.Services {
                     }
                 }
 
-                SaveMetadata();
+                _metadata.SaveMetadata();
 
                 _logger.LogInformation("CopyInAsync: Successfully copied {DestName} into the container.", destName);
                 return true;
@@ -95,6 +102,7 @@ namespace Filescript.Backend.Services {
 
             try
             {
+                // _historyService.PushOperation(new FileOperation(fullPath, FileOperationType.Delete));
                 using (FileStream fs = new FileStream(destPath, FileMode.Create, FileAccess.Write))
                 {
                     foreach (int blockIndex in fileEntry.BlockIndices)
@@ -149,7 +157,7 @@ namespace Filescript.Backend.Services {
                 _metadata.Files.Remove(fileName);
 
                 // Update metadata on disk
-                SaveMetadata();
+                _metadata.SaveMetadata();
 
                 _logger.LogInformation("RemoveFileAsync: Successfully removed {FileName}.", fileName);
                 return true;
@@ -176,66 +184,6 @@ namespace Filescript.Backend.Services {
             catch (Exception ex)
             {
                 _logger.LogError(ex, "An error occurred during ListFiles.");
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Loads the container metadata from the container file.
-        /// </summary>
-        /// <returns>The loaded <see cref="ContainerMetadata"/>.</returns>
-        private ContainerMetadata LoadMetadata()
-        {
-            _logger.LogInformation("Loading container metadata.");
-
-            if (!File.Exists(_fileIOHelper.ContainerFilePath))
-            {
-                _logger.LogWarning("Container file does not exist. Initializing new metadata.");
-                return new ContainerMetadata();
-            }
-
-            try
-            {
-                using (FileStream fs = new FileStream(_fileIOHelper.ContainerFilePath, FileMode.Open, FileAccess.Read))
-                {
-                    // Assume metadata is stored at the beginning of the container file
-                    const int metadataSize = 1024; // Define metadataSize appropriately
-                    byte[] buffer = new byte[metadataSize];
-                    fs.Read(buffer, 0, buffer.Length);
-                    string json = System.Text.Encoding.UTF8.GetString(buffer);
-                    var metadata = JsonSerializer.Deserialize<ContainerMetadata>(json);
-                    return metadata ?? new ContainerMetadata();
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to load container metadata.");
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Saves the container metadata to the container file.
-        /// </summary>
-        private void SaveMetadata()
-        {
-           _logger.LogInformation("Saving container metadata.");
-
-            try
-            {
-                string json = JsonSerializer.Serialize(_metadata);
-                byte[] buffer = System.Text.Encoding.UTF8.GetBytes(json);
-
-                using (FileStream fs = new FileStream(_fileIOHelper.ContainerFilePath, FileMode.OpenOrCreate, FileAccess.Write))
-                {
-                    // Assume metadata is stored at the beginning of the container file
-                    fs.Write(buffer, 0, buffer.Length);
-                    // Optionally, pad the remaining space reserved for metadata
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to save container metadata.");
                 throw;
             }
         }

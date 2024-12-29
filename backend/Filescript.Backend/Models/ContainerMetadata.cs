@@ -1,4 +1,7 @@
+using System.Text.Json;
+using Filescript.Backend.Services;
 using Filescript.Models;
+using Filescript.Utilities;
 
 namespace Filescript.Backend.Models {
     /// <summary>
@@ -39,6 +42,10 @@ namespace Filescript.Backend.Models {
         /// <summary>
         /// Initializes a new instance of the <see cref="ContainerMetadata"/> class with default values.
         /// </summary>
+        /// 
+        private readonly ILogger<FileService> _logger;
+        private readonly FileIOHelper _fileIOHelper;
+
         public ContainerMetadata()
         {
             Files = new Dictionary<string, FileEntry>(StringComparer.OrdinalIgnoreCase);
@@ -169,6 +176,66 @@ namespace Filescript.Backend.Models {
         public IEnumerable<DirectoryEntry> GetAllDirectories()
         {
             return Directories.Values;
+        }
+
+        public ContainerMetadata LoadMetadata()
+        {
+            _logger.LogInformation("Loading container metadata.");
+
+            if (!File.Exists(_fileIOHelper.ContainerFilePath))
+            {
+                _logger.LogWarning("Container file does not exist. Initializing new metadata.");
+                return new ContainerMetadata();
+            }
+
+            try
+            {
+                using (FileStream fs = new FileStream(_fileIOHelper.ContainerFilePath, FileMode.Open, FileAccess.Read))
+                {
+                    // Assume metadata is stored at the beginning of the container file
+                    const int metadataSize = 1024; // Define metadataSize appropriately
+                    byte[] buffer = new byte[metadataSize];
+                    fs.Read(buffer, 0, buffer.Length);
+                    string json = System.Text.Encoding.UTF8.GetString(buffer);
+                    var metadata = JsonSerializer.Deserialize<ContainerMetadata>(json);
+                    return metadata ?? new ContainerMetadata();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to load container metadata.");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Saves the container metadata to the container file.
+        /// </summary>
+        public void SaveMetadata()
+        {
+           _logger.LogInformation("Saving container metadata.");
+
+            try
+            {
+                string json = JsonSerializer.Serialize(this);
+                byte[] buffer = System.Text.Encoding.UTF8.GetBytes(json);
+
+                using (FileStream fs = new FileStream(_fileIOHelper.ContainerFilePath, FileMode.OpenOrCreate, FileAccess.Write))
+                {
+                    // Assume metadata is stored at the beginning of the container file
+                    fs.Write(buffer, 0, buffer.Length);
+                    // Optionally, pad the remaining space reserved for metadata
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to save container metadata.");
+                throw;
+            }
+        }
+
+        public byte[] Serialize() {
+            return System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(this);
         }
     }
 }

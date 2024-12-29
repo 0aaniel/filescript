@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.Serialization;
 
-namespace Filescript.Exceptions
+namespace Filescript.Backend.Exceptions
 {
     /// <summary>
     /// Exception thrown when attempting to remove a directory that is not empty.

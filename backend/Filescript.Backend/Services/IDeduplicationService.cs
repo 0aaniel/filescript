@@ -1,3 +1,4 @@
+
 namespace Filescript.Backend.Services {
     /// <summary>
     /// Interface defining deduplication operations.
