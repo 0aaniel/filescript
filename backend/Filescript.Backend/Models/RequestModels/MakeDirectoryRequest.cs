@@ -1,6 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 
-namespace Filescript.Models.RequestModels
+namespace Filescript.Backend.Models.RequestModels
 {
     /// <summary>
     /// Represents a request to create a new directory.

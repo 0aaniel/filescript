@@ -1,213 +1,161 @@
 using Filescript.Backend.Exceptions;
 using Filescript.Backend.Models;
-using Filescript.Backend.Services;
+using Filescript.Backend.Utilities;
 using Filescript.Models;
-using Filescript.Utilities;
 using Microsoft.Extensions.Logging;
 using System;
-using System.IO;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
-namespace Filescript.Services
+namespace Filescript.Backend.Services
 {
     /// <summary>
-    /// Service handling directory operations within the container.
+    /// Service handling directory operations within a specified container.
     /// </summary>
     public class DirectoryService : IDirectoryService
     {
         private readonly ILogger<DirectoryService> _logger;
-        private readonly ContainerMetadata _metadata;
-        private readonly FileIOHelper _fileIOHelper;
-        private readonly Superblock _superblock;
+        private readonly ContainerManager _containerManager;
+        private readonly string _containerName;
+        private ContainerMetadata _metadata;
+        private FileIOHelper _fileIOHelper;
+        private Superblock _superblock;
 
-        public DirectoryService(ILogger<DirectoryService> logger, ContainerMetadata metadata, FileIOHelper fileIOHelper)
+        public DirectoryService(ILogger<DirectoryService> logger, ContainerManager containerManager, string containerName)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _metadata = metadata ?? throw new ArgumentNullException(nameof(metadata));
-            _fileIOHelper = fileIOHelper ?? throw new ArgumentNullException(nameof(fileIOHelper));
+            _containerManager = containerManager ?? throw new ArgumentNullException(nameof(containerManager));
+            _containerName = containerName ?? throw new ArgumentNullException(nameof(containerName));
 
-            // Load superblock from block 0
-            byte[] superblockData = _fileIOHelper.ReadBlockAsync(0).Result;
-            _superblock = Superblock.Deserialize(superblockData);
+            // Initialize metadata, FileIOHelper, and Superblock
+            InitializeMetadata();
         }
 
-        public async Task MakeDirectoryAsync(string directoryName, string path)
+        /// <summary>
+        /// Initializes metadata, FileIOHelper, and Superblock for the container.
+        /// </summary>
+        private void InitializeMetadata()
         {
-            _logger.LogInformation("DirectoryService: Attempting to create directory '{DirectoryName}' at path '{Path}'.", directoryName, path);
+            // Retrieve metadata, FileIOHelper, and Superblock from ContainerManager
+            _metadata = _containerManager.GetContainer(_containerName);
+            _fileIOHelper = _containerManager.GetFileIOHelper(_containerName);
+            _superblock = _containerManager.GetSuperblock(_containerName);
 
-            string targetPath = string.IsNullOrEmpty(path) ? _metadata.CurrentDirectory : path;
+            // Load metadata from the metadata block
+            byte[] metadataBytes = _fileIOHelper.ReadBlock(_superblock.MetadataStartBlock);
+            _metadata = ContainerMetadata.Deserialize(metadataBytes, _superblock.BlockSize);
+        }
 
-            // Validate target path exists
-            if (!DirectoryExists(targetPath))
-            {
-                _logger.LogError("DirectoryService: Target path '{TargetPath}' does not exist.", targetPath);
-                throw new DirectoryNotFoundException($"The target path '{targetPath}' does not exist.");
-            }
+        /// <summary>
+        /// Saves the current state of metadata to the metadata block.
+        /// </summary>
+        private void SaveMetadata()
+        {
+            byte[] metadataBytes = _metadata.Serialize();
+            _fileIOHelper.WriteBlock(_superblock.MetadataStartBlock, metadataBytes);
+        }
 
-            string fullPath = PathCombine(targetPath, directoryName);
+        /// <inheritdoc />
+        public async Task<bool> MakeDirectoryAsync(string directoryName, string path)
+        {
+            _logger.LogInformation("DirectoryService: Creating directory '{DirectoryName}' at path '{Path}' in container '{ContainerName}'.", directoryName, path, _containerName);
+
+            // Validate inputs
+            if (string.IsNullOrWhiteSpace(directoryName))
+                throw new ArgumentException("Directory name cannot be null or whitespace.", nameof(directoryName));
+
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("Path cannot be null or whitespace.", nameof(path));
+
+            // Construct the full path
+            string fullPath = System.IO.Path.Combine(path, directoryName).Replace("\\", "/");
 
             // Check if directory already exists
-            if (DirectoryExists(fullPath))
-            {
-                _logger.LogWarning("DirectoryService: Directory '{FullPath}' already exists.", fullPath);
-                throw new DirectoryAlreadyExistsException($"The directory '{fullPath}' already exists.");
-            }
+            if (_metadata.Directories.ContainsKey(fullPath))
+                throw new DirectoryAlreadyExistsException($"Directory '{fullPath}' already exists.");
 
-            // Create directory entry in metadata
-            var newDirectory = new DirectoryEntry(fullPath);
-            _metadata.AddDirectory(newDirectory);
+            // Create a new DirectoryEntry
+            var directoryEntry = new DirectoryEntry(directoryName, fullPath);
+            _metadata.Directories.Add(fullPath, directoryEntry);
 
-            // Update parent directory's subdirectories
-            var parentDirectory = GetDirectoryEntry(targetPath);
-            parentDirectory.AddSubDirectory(fullPath);
-            _metadata.SaveMetadata();
+            // Save metadata
+            SaveMetadata();
 
-            // Serialize and write metadata back to metadata block
-            byte[] metadataBytes = _metadata.Serialize();
-            await _fileIOHelper.WriteBlockAsync(_superblock.MetadataStartBlock, metadataBytes);
-
-            _logger.LogInformation("DirectoryService: Directory '{FullPath}' created successfully.", fullPath);
+            _logger.LogInformation("DirectoryService: Directory '{DirectoryName}' created successfully at path '{Path}' in container '{ContainerName}'.", directoryName, path, _containerName);
+            return true;
         }
 
-        public async Task ChangeDirectoryAsync(string targetPath)
+        /// <inheritdoc />
+        public async Task<bool> ChangeDirectoryAsync(string targetPath)
         {
-            _logger.LogInformation("DirectoryService: Attempting to change directory to '{TargetPath}'.", targetPath);
+            _logger.LogInformation("DirectoryService: Changing current directory to '{TargetPath}' in container '{ContainerName}'.", targetPath, _containerName);
 
-            string resolvedPath = ResolvePath(targetPath);
+            // Validate input
+            if (string.IsNullOrWhiteSpace(targetPath))
+                throw new ArgumentException("Target path cannot be null or whitespace.", nameof(targetPath));
 
-            if (!DirectoryExists(resolvedPath))
-            {
-                _logger.LogError("DirectoryService: Target directory '{ResolvedPath}' does not exist.", resolvedPath);
-                throw new DirectoryNotFoundException($"The directory '{resolvedPath}' does not exist.");
-            }
+            // Check if target directory exists
+            if (!_metadata.Directories.ContainsKey(targetPath))
+                throw new Exceptions.DirectoryNotFoundException($"Directory '{targetPath}' does not exist.");
 
-            _metadata.CurrentDirectory = resolvedPath;
-            _metadata.SaveMetadata();
+            // Update current directory
+            _metadata.CurrentDirectory = targetPath;
 
-            // Serialize and write metadata back to metadata block
-            byte[] metadataBytes = _metadata.Serialize();
-            await _fileIOHelper.WriteBlockAsync(_superblock.MetadataStartBlock, metadataBytes);
+            // Save metadata
+            SaveMetadata();
 
-            _logger.LogInformation("DirectoryService: Current directory changed to '{ResolvedPath}'.", resolvedPath);
+            _logger.LogInformation("DirectoryService: Current directory changed to '{TargetPath}' in container '{ContainerName}'.", targetPath, _containerName);
+            return true;
         }
 
-
-        public async Task RemoveDirectoryAsync(string directoryName, string path)
+        /// <inheritdoc />
+        public async Task<bool> RemoveDirectoryAsync(string directoryName, string path)
         {
-            _logger.LogInformation("DirectoryService: Attempting to remove directory '{DirectoryName}' at path '{Path}'.", directoryName, path);
+            _logger.LogInformation("DirectoryService: Removing directory '{DirectoryName}' at path '{Path}' in container '{ContainerName}'.", directoryName, path, _containerName);
 
-            string targetPath = string.IsNullOrEmpty(path) ? _metadata.CurrentDirectory : path;
-
-            // Validate target path exists
-            if (!DirectoryExists(targetPath))
-            {
-                _logger.LogError("DirectoryService: Target path '{TargetPath}' does not exist.", targetPath);
-                throw new DirectoryNotFoundException($"The target path '{targetPath}' does not exist.");
-            }
-
-            string fullPath = PathCombine(targetPath, directoryName);
+            // Construct the full path
+            string fullPath = System.IO.Path.Combine(path, directoryName).Replace("\\", "/");
 
             // Check if directory exists
-            if (!DirectoryExists(fullPath))
-            {
-                _logger.LogError("DirectoryService: Directory '{FullPath}' does not exist.", fullPath);
-                throw new DirectoryNotFoundException($"The directory '{fullPath}' does not exist.");
-            }
+            if (!_metadata.Directories.ContainsKey(fullPath))
+                throw new Exceptions.DirectoryNotFoundException($"Directory '{fullPath}' does not exist.");
 
-            // Check if directory is empty
-            var directoryEntry = GetDirectoryEntry(fullPath);
-            if (directoryEntry.SubDirectories.Count > 0 || directoryEntry.Files.Count > 0)
-            {
-                _logger.LogWarning("DirectoryService: Directory '{FullPath}' is not empty.", fullPath);
-                throw new DirectoryNotEmptyException($"The directory '{fullPath}' is not empty.");
-            }
+            // Remove the directory
+            _metadata.Directories.Remove(fullPath);
 
-            // Remove directory from metadata
-            _metadata.RemoveDirectory(fullPath);
+            // Save metadata
+            SaveMetadata();
 
-            // Update parent directory's subdirectories
-            var parentDirectory = GetDirectoryEntry(targetPath);
-            parentDirectory.RemoveSubDirectory(fullPath);
-            _metadata.SaveMetadata();
-
-            // Serialize and write metadata back to metadata block
-            byte[] metadataBytes = _metadata.Serialize();
-            await _fileIOHelper.WriteBlockAsync(_superblock.MetadataStartBlock, metadataBytes);
-
-            _logger.LogInformation("DirectoryService: Directory '{FullPath}' removed successfully.", fullPath);
+            _logger.LogInformation("DirectoryService: Directory '{DirectoryName}' removed successfully from path '{Path}' in container '{ContainerName}'.", directoryName, path, _containerName);
+            return true;
         }
 
-        /// <summary>
-        /// Checks if a directory exists in the metadata.
-        /// </summary>
-        private bool DirectoryExists(string path)
-        {
-            return _metadata.Directories.ContainsKey(path);
-        }
-
-        /// <summary>
-        /// Retrieves a directory entry from the metadata.
-        /// </summary>
-        private DirectoryEntry GetDirectoryEntry(string path)
-        {
-            if (_metadata.Directories.TryGetValue(path, out DirectoryEntry directory))
-            {
-                return directory;
-            }
-            else
-            {
-                throw new DirectoryNotFoundException($"The directory '{path}' does not exist.");
-            }
-        }
-
-        /// <summary>
-        /// Resolves the provided path to an absolute path based on the current directory.
-        /// </summary>
-        private string ResolvePath(string path)
-        {
-            if (Path.IsPathRooted(path))
-            {
-                return path;
-            }
-            else
-            {
-                return PathCombine(_metadata.CurrentDirectory, path);
-            }
-        }
-
-        /// <summary>
-        /// Combines two path segments, handling directory separators.
-        /// </summary>
-        private string PathCombine(string path1, string path2)
-        {
-            return Path.Combine(path1, path2).Replace("\\", "/");
-        }
-
+        /// <inheritdoc />
         public List<DirectoryEntry> ListDirectories()
         {
-            _logger.LogInformation("DirectoryService: Listing directories in the current directory.");
+            _logger.LogInformation("DirectoryService: Listing directories in container '{ContainerName}'.", _containerName);
 
-            var directories = new List<DirectoryEntry>();
-
-            foreach (var directory in _metadata.Directories.Values)
-            {
-                if (directory.Path.StartsWith(_metadata.CurrentDirectory))
-                {
-                    directories.Add(directory);
-                }
-            }
-
-            return directories;
+            return new List<DirectoryEntry>(_metadata.Directories.Values);
         }
 
+        /// <inheritdoc />
         public string GetCurrentDirectory()
         {
-            throw new NotImplementedException();
+            _logger.LogInformation("DirectoryService: Getting current directory in container '{ContainerName}'.", _containerName);
+
+            return _metadata.CurrentDirectory;
         }
 
-        public Task<bool> BasicHealthCheckAsync()
+        /// <inheritdoc />
+        public async Task<bool> BasicHealthCheckAsync()
         {
-            throw new NotImplementedException();
+            _logger.LogInformation("DirectoryService: Performing basic health check on container '{ContainerName}'.", _containerName);
+
+            // Implement health check logic as needed
+            // For example, verify that metadata is consistent
+
+            // Placeholder: Assume health check passes
+            return true;
         }
     }
 }

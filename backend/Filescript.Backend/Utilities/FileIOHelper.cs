@@ -3,172 +3,120 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 
-namespace Filescript.Utilities
+namespace Filescript.Backend.Utilities
 {
     /// <summary>
-    /// Helper class for handling low-level file I/O operations with the container file.
+    /// Helper class for performing file I/O operations on the container file.
     /// </summary>
     public class FileIOHelper : IDisposable
     {
         private readonly ILogger<FileIOHelper> _logger;
         private readonly string _containerFilePath;
         private readonly int _blockSize;
-        private readonly FileStream _fileStream;
-        private bool _disposed = false;
+        private FileStream _fileStream;
 
-        /// <summary>
-        /// Gets the path to the container file.
-        /// </summary>
-        public string ContainerFilePath => _containerFilePath;
-
-        /// <summary>
-        /// Gets the size of each block in bytes.
-        /// </summary>
-        public int BlockSize => _blockSize;
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="FileIOHelper"/> class.
-        /// </summary>
-        /// <param name="logger">Logger instance for logging.</param>
-        /// <param name="containerFilePath">Path to the container file.</param>
-        /// <param name="blockSize">Size of each block in bytes.</param>
         public FileIOHelper(ILogger<FileIOHelper> logger, string containerFilePath, int blockSize = 4096)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _containerFilePath = containerFilePath ?? throw new ArgumentNullException(nameof(containerFilePath));
             _blockSize = blockSize;
 
-            // Ensure the container file exists
-            if (!File.Exists(_containerFilePath))
-            {
-                _logger.LogInformation("Container file does not exist. Creating new container file at {Path}.", _containerFilePath);
-                using (var fs = new FileStream(_containerFilePath, FileMode.CreateNew, FileAccess.Write))
-                {
-                    // Optionally, initialize the container with a specific size or structure
-                }
-            }
-
-            // Open the container file for reading and writing
-            _fileStream = new FileStream(_containerFilePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
-            _logger.LogInformation("Opened container file at {Path} with block size {BlockSize} bytes.", _containerFilePath, _blockSize);
+            // Open the file stream
+            _fileStream = new FileStream(_containerFilePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         }
 
         /// <summary>
-        /// Writes data to a specific block in the container file.
+        /// Initializes the container file with the specified number of blocks.
         /// </summary>
-        /// <param name="blockIndex">Index of the block to write to.</param>
-        /// <param name="data">Data to write. Must not exceed the block size.</param>
-        /// <returns>A task representing the asynchronous operation.</returns>
-        /// <exception cref="ArgumentOutOfRangeException">Thrown when blockIndex is negative.</exception>
-        /// <exception cref="ArgumentException">Thrown when data length exceeds block size.</exception>
-        public async Task WriteBlockAsync(int blockIndex, byte[] data)
+        public async Task InitializeContainerAsync(long totalBlocks)
         {
-            if (blockIndex < 0)
-                throw new ArgumentOutOfRangeException(nameof(blockIndex), "Block index cannot be negative.");
+            _logger.LogInformation("FileIOHelper: Initializing container file '{ContainerFilePath}' with {TotalBlocks} blocks.", _containerFilePath, totalBlocks);
 
-            if (data.Length > _blockSize)
-                throw new ArgumentException($"Data length {data.Length} exceeds block size {_blockSize} bytes.", nameof(data));
+            // Set the file size to totalBlocks * blockSize
+            _fileStream.SetLength(totalBlocks * _blockSize);
 
-            long position = (long)blockIndex * _blockSize;
-            _fileStream.Seek(position, SeekOrigin.Begin);
-
-            byte[] buffer = new byte[_blockSize];
-            Array.Copy(data, buffer, data.Length);
-            if (data.Length < _blockSize)
+            // Optionally, write zeros or some initial data
+            byte[] emptyBlock = new byte[_blockSize];
+            for (long i = 0; i < totalBlocks; i++)
             {
-                // Padding remaining bytes with zeros
-                Array.Clear(buffer, data.Length, _blockSize - data.Length);
+                await WriteBlockAsync(i, emptyBlock);
             }
 
-            await _fileStream.WriteAsync(buffer, 0, _blockSize);
-            await _fileStream.FlushAsync();
-
-            _logger.LogInformation("Written data to block {BlockIndex} at position {Position}.", blockIndex, position);
+            _logger.LogInformation("FileIOHelper: Container file '{ContainerFilePath}' initialized successfully.", _containerFilePath);
         }
 
         /// <summary>
-        /// Reads data from a specific block in the container file.
+        /// Reads a block at the specified index.
         /// </summary>
-        /// <param name="blockIndex">Index of the block to read from.</param>
-        /// <returns>A task representing the asynchronous operation, containing the data read.</returns>
-        /// <exception cref="ArgumentOutOfRangeException">Thrown when blockIndex is negative.</exception>
-        public async Task<byte[]> ReadBlockAsync(int blockIndex)
+        /// <param name="blockIndex">The index of the block to read.</param>
+        /// <returns>A byte array containing the block's data.</returns>
+        public byte[] ReadBlock(long blockIndex)
         {
-            if (blockIndex < 0)
-                throw new ArgumentOutOfRangeException(nameof(blockIndex), "Block index cannot be negative.");
-
-            long position = (long)blockIndex * _blockSize;
-            _fileStream.Seek(position, SeekOrigin.Begin);
+            _logger.LogInformation("FileIOHelper: Reading block {BlockIndex} from '{ContainerFilePath}'.", blockIndex, _containerFilePath);
 
             byte[] buffer = new byte[_blockSize];
-            int bytesRead = await _fileStream.ReadAsync(buffer, 0, _blockSize);
-
-            if (bytesRead == 0)
-            {
-                _logger.LogWarning("ReadBlockAsync: No data read from block {BlockIndex}. Returning empty data.", blockIndex);
-                return new byte[0];
-            }
-
-            _logger.LogInformation("Read data from block {BlockIndex} at position {Position}. Bytes read: {BytesRead}.", blockIndex, position, bytesRead);
-
+            _fileStream.Seek(blockIndex * _blockSize, SeekOrigin.Begin);
+            _fileStream.Read(buffer, 0, _blockSize);
             return buffer;
         }
 
         /// <summary>
-        /// Retrieves the total number of blocks in the container file.
+        /// Asynchronously reads a block at the specified index.
         /// </summary>
-        /// <returns>Total number of blocks.</returns>
-        public long GetTotalBlocks()
+        /// <param name="blockIndex">The index of the block to read.</param>
+        /// <returns>A byte array containing the block's data.</returns>
+        public async Task<byte[]> ReadBlockAsync(long blockIndex)
         {
-            long totalBlocks = _fileStream.Length / _blockSize;
-            _logger.LogInformation("Container file has {TotalBlocks} blocks.", totalBlocks);
-            return totalBlocks;
+            _logger.LogInformation("FileIOHelper: Asynchronously reading block {BlockIndex} from '{ContainerFilePath}'.", blockIndex, _containerFilePath);
+
+            byte[] buffer = new byte[_blockSize];
+            _fileStream.Seek(blockIndex * _blockSize, SeekOrigin.Begin);
+            await _fileStream.ReadAsync(buffer, 0, _blockSize);
+            return buffer;
         }
 
         /// <summary>
-        /// Closes the container file stream.
+        /// Writes a byte array to a block at the specified index.
         /// </summary>
-        public void Close()
+        /// <param name="blockIndex">The index of the block to write to.</param>
+        /// <param name="data">The data to write.</param>
+        public void WriteBlock(long blockIndex, byte[] data)
         {
-            _fileStream.Close();
-            _logger.LogInformation("Closed container file at {Path}.", _containerFilePath);
+            if (data.Length != _blockSize)
+                throw new ArgumentException($"Data must be exactly {_blockSize} bytes.", nameof(data));
+
+            _logger.LogInformation("FileIOHelper: Writing to block {BlockIndex} in '{ContainerFilePath}'.", blockIndex, _containerFilePath);
+
+            _fileStream.Seek(blockIndex * _blockSize, SeekOrigin.Begin);
+            _fileStream.Write(data, 0, _blockSize);
+            _fileStream.Flush();
         }
 
         /// <summary>
-        /// Ensures that all pending data is written to the container file.
+        /// Asynchronously writes a byte array to a block at the specified index.
         /// </summary>
-        /// <returns>A task representing the asynchronous operation.</returns>
-        public async Task FlushAsync()
+        /// <param name="blockIndex">The index of the block to write to.</param>
+        /// <param name="data">The data to write.</param>
+        public async Task WriteBlockAsync(long blockIndex, byte[] data)
         {
+            if (data.Length != _blockSize)
+                throw new ArgumentException($"Data must be exactly {_blockSize} bytes.", nameof(data));
+
+            _logger.LogInformation("FileIOHelper: Asynchronously writing to block {BlockIndex} in '{ContainerFilePath}'.", blockIndex, _containerFilePath);
+
+            _fileStream.Seek(blockIndex * _blockSize, SeekOrigin.Begin);
+            await _fileStream.WriteAsync(data, 0, _blockSize);
             await _fileStream.FlushAsync();
-            _logger.LogInformation("Flushed container file at {Path}.", _containerFilePath);
         }
 
-        /// <summary>
-        /// Releases all resources used by the <see cref="FileIOHelper"/>.
-        /// </summary>
         public void Dispose()
         {
-            Dispose(true);
-            GC.SuppressFinalize(this);
+            _fileStream?.Dispose();
         }
 
-        /// <summary>
-        /// Releases unmanaged and optionally managed resources.
-        /// </summary>
-        /// <param name="disposing">Indicates whether to release managed resources.</param>
-        protected virtual void Dispose(bool disposing)
+        public string GetContainerFilePath()
         {
-            if (!_disposed)
-            {
-                if (disposing)
-                {
-                    _fileStream?.Dispose();
-                    _logger.LogInformation("Disposed FileIOHelper and closed container file at {Path}.", _containerFilePath);
-                }
-
-                _disposed = true;
-            }
+            return _containerFilePath;
         }
     }
 }

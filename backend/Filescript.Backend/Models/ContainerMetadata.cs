@@ -1,159 +1,108 @@
+using System;
+using System.Collections.Generic;
 using System.Text.Json;
-using Filescript.Backend.Services;
-using Filescript.Models;
-using Filescript.Utilities;
+using System.Text;
+using System.IO;
+using System.Linq;
+using Filescript.Backend.Exceptions;
+using Filescript.Backend.Models;
+using System.IO.Compression;
 
-namespace Filescript.Backend.Models {
+namespace Filescript.Models
+{
     /// <summary>
     /// Represents the metadata of the file system container.
-    /// This includes information about files, directories, free blocks, and other essential data structures.
     /// </summary>
-    public class ContainerMetadata {
-        /// <summary>
-        /// Dictionary mapping file names to their corresponding <see cref="FileEntry"/> objects.
-        /// </summary>
-        public Dictionary<string, FileEntry> Files { get; set; }
-
-        /// <summary>
-        /// Dictionary mapping directory names to their corresponding <see cref="DirectoryEntry"/> objects.
-        /// </summary>
+    public class ContainerMetadata
+    {
         public Dictionary<string, DirectoryEntry> Directories { get; set; }
-
-        /// <summary>
-        /// List of free block indices available for storage.
-        /// </summary>
+        public Dictionary<string, FileEntry> Files { get; set; }
         public List<int> FreeBlocks { get; set; }
-
-        /// <summary>
-        /// The current working directory in the container.
-        /// </summary>
         public string CurrentDirectory { get; set; }
-
-        /// <summary>
-        /// Total number of blocks in the container.
-        /// </summary>
-        public int TotalBlocks { get; set; }
-
-        /// <summary>
-        /// Size of each block in bytes.
-        /// </summary>
+        public string ContainerFilePath { get; set; } // Added property
+        public string ContainerName { get; set; }
+        public long TotalBlocks { get; set; }
         public int BlockSize { get; set; }
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="ContainerMetadata"/> class with default values.
-        /// </summary>
-        /// 
-        private readonly ILogger<FileService> _logger;
-        private readonly FileIOHelper _fileIOHelper;
+        private readonly int _blockSize;
 
-        public ContainerMetadata()
-        {
-            Files = new Dictionary<string, FileEntry>(StringComparer.OrdinalIgnoreCase);
-            Directories = new Dictionary<string, DirectoryEntry>(StringComparer.OrdinalIgnoreCase);
-            FreeBlocks = new List<int>();
-            CurrentDirectory = "/"; // Root directory
-            TotalBlocks = 0;
-            BlockSize = 4096; // Default block size (4KB)
-        }
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="ContainerMetadata"/> class with specified parameters.
-        /// </summary>
-        /// <param name="totalBlocks">Total number of blocks in the container.</param>
-        /// <param name="blockSize">Size of each block in bytes.</param>
         public ContainerMetadata(int totalBlocks, int blockSize = 4096)
         {
-            Files = new Dictionary<string, FileEntry>(StringComparer.OrdinalIgnoreCase);
+            _blockSize = blockSize;
             Directories = new Dictionary<string, DirectoryEntry>(StringComparer.OrdinalIgnoreCase);
+            Files = new Dictionary<string, FileEntry>(StringComparer.OrdinalIgnoreCase);
             FreeBlocks = new List<int>();
-            CurrentDirectory = "/"; // Root directory
-            TotalBlocks = totalBlocks;
-            BlockSize = blockSize;
 
-            // Initialize all blocks as free
-            for (int i = 0; i < TotalBlocks; i++)
+            // Initialize root directory
+            string rootPath = "/";
+            var rootDirectory = new DirectoryEntry("root", rootPath);
+            Directories.Add(rootPath, rootDirectory);
+
+            // Reserve blocks 0 and 1 for superblock and metadata
+            for (int i = 0; i < 2; i++)
             {
                 FreeBlocks.Add(i);
             }
-        }
 
-        /// <summary>
-        /// Adds a new file to the metadata.
-        /// </summary>
-        /// <param name="fileEntry">The <see cref="FileEntry"/> object representing the file.</param>
-        public void AddFile(FileEntry fileEntry)
-        {
-            if (fileEntry == null)
-                throw new ArgumentNullException(nameof(fileEntry));
+            // Add remaining blocks to free list
+            for (int i = 2; i < totalBlocks; i++)
+            {
+                FreeBlocks.Add(i);
+            }
 
-            if (Files.ContainsKey(fileEntry.Name))
-                throw new ArgumentException($"A file with the name '{fileEntry.Name}' already exists.");
-
-            Files.Add(fileEntry.Name, fileEntry);
-        }
-
-        /// <summary>
-        /// Removes a file from the metadata.
-        /// </summary>
-        /// <param name="fileName">The name of the file to remove.</param>
-        public void RemoveFile(string fileName)
-        {
-            if (string.IsNullOrWhiteSpace(fileName))
-                throw new ArgumentException("File name cannot be null or empty.", nameof(fileName));
-
-            Files.Remove(fileName);
+            CurrentDirectory = rootPath;
         }
 
         /// <summary>
         /// Adds a new directory to the metadata.
         /// </summary>
-        /// <param name="directoryEntry">The <see cref="DirectoryEntry"/> object representing the directory.</param>
-        public void AddDirectory(DirectoryEntry directoryEntry)
+        public void AddDirectory(DirectoryEntry directory)
         {
-            if (directoryEntry == null)
-                throw new ArgumentNullException(nameof(directoryEntry));
-
-            if (Directories.ContainsKey(directoryEntry.Name))
-                throw new ArgumentException($"A directory with the name '{directoryEntry.Name}' already exists.");
-
-            Directories.Add(directoryEntry.Name, directoryEntry);
+            if (!Directories.ContainsKey(directory.Path))
+            {
+                Directories.Add(directory.Path, directory);
+            }
+            else
+            {
+                throw new DirectoryAlreadyExistsException($"Directory '{directory.Path}' already exists.");
+            }
         }
 
         /// <summary>
         /// Removes a directory from the metadata.
         /// </summary>
-        /// <param name="directoryName">The name of the directory to remove.</param>
-        public void RemoveDirectory(string directoryName)
+        public void RemoveDirectory(string directoryPath)
         {
-            if (string.IsNullOrWhiteSpace(directoryName))
-                throw new ArgumentException("Directory name cannot be null or empty.", nameof(directoryName));
-
-            Directories.Remove(directoryName);
+            if (Directories.ContainsKey(directoryPath))
+            {
+                Directories.Remove(directoryPath);
+            }
+            else
+            {
+                throw new Backend.Exceptions.DirectoryNotFoundException($"Directory '{directoryPath}' not found.");
+            }
         }
 
         /// <summary>
-        /// Allocates a block for storage and removes it from the free blocks list.
+        /// Allocates a free block.
         /// </summary>
         /// <returns>The index of the allocated block.</returns>
         public int AllocateBlock()
         {
             if (FreeBlocks.Count == 0)
-                throw new InvalidOperationException("No free blocks available for allocation.");
+                throw new InvalidOperationException("No free blocks available.");
 
-            int blockIndex = FreeBlocks[FreeBlocks.Count - 1];
-            FreeBlocks.RemoveAt(FreeBlocks.Count - 1);
+            int blockIndex = FreeBlocks[0];
+            FreeBlocks.RemoveAt(0);
             return blockIndex;
         }
 
         /// <summary>
-        /// Frees a block by adding its index back to the free blocks list.
+        /// Frees an allocated block.
         /// </summary>
         /// <param name="blockIndex">The index of the block to free.</param>
         public void FreeBlock(int blockIndex)
         {
-            if (blockIndex < 0 || blockIndex >= TotalBlocks)
-                throw new ArgumentOutOfRangeException(nameof(blockIndex), "Block index is out of range.");
-
             if (!FreeBlocks.Contains(blockIndex))
             {
                 FreeBlocks.Add(blockIndex);
@@ -161,81 +110,57 @@ namespace Filescript.Backend.Models {
         }
 
         /// <summary>
-        /// Retrieves all file entries.
+        /// Serializes the metadata to a byte array.
         /// </summary>
-        /// <returns>A collection of all <see cref="FileEntry"/> objects.</returns>
-        public IEnumerable<FileEntry> GetAllFiles()
+        public byte[] Serialize()
         {
-            return Files.Values;
+            var options = new JsonSerializerOptions
+            {
+                IgnoreNullValues = true,
+                WriteIndented = false,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            };
+            return JsonSerializer.SerializeToUtf8Bytes(this, options);
         }
 
+        public static ContainerMetadata Deserialize(byte[] compressedBytes)
+        {
+            using (var inputStream = new MemoryStream(compressedBytes))
+            using (var gzip = new GZipStream(inputStream, CompressionMode.Decompress))
+            using (var decompressedStream = new MemoryStream())
+            {
+                gzip.CopyTo(decompressedStream);
+                return JsonSerializer.Deserialize<ContainerMetadata>(decompressedStream.ToArray());
+            }
+        }
         /// <summary>
-        /// Retrieves all directory entries.
+        /// Deserializes the metadata from a byte array.
         /// </summary>
-        /// <returns>A collection of all <see cref="DirectoryEntry"/> objects.</returns>
-        public IEnumerable<DirectoryEntry> GetAllDirectories()
+        public static ContainerMetadata Deserialize(byte[] data, int blockSize = 4096)
         {
-            return Directories.Values;
+            string json = Encoding.UTF8.GetString(data).TrimEnd('\0');
+            var metadataDto = JsonSerializer.Deserialize<ContainerMetadataDto>(json);
+            var metadata = new ContainerMetadata(metadataDto.FreeBlockBitmap.Length, blockSize)
+            {
+                Directories = metadataDto.Directories,
+                Files = metadataDto.Files,
+                CurrentDirectory = metadataDto.CurrentDirectory,
+                FreeBlocks = metadataDto.FreeBlockBitmap.ToList(),
+                ContainerFilePath = metadataDto.ContainerFilePath // Assign the file path
+            };
+            return metadata;
         }
+    }
 
-        public ContainerMetadata LoadMetadata()
-        {
-            _logger.LogInformation("Loading container metadata.");
-
-            if (!File.Exists(_fileIOHelper.ContainerFilePath))
-            {
-                _logger.LogWarning("Container file does not exist. Initializing new metadata.");
-                return new ContainerMetadata();
-            }
-
-            try
-            {
-                using (FileStream fs = new FileStream(_fileIOHelper.ContainerFilePath, FileMode.Open, FileAccess.Read))
-                {
-                    // Assume metadata is stored at the beginning of the container file
-                    const int metadataSize = 1024; // Define metadataSize appropriately
-                    byte[] buffer = new byte[metadataSize];
-                    fs.Read(buffer, 0, buffer.Length);
-                    string json = System.Text.Encoding.UTF8.GetString(buffer);
-                    var metadata = JsonSerializer.Deserialize<ContainerMetadata>(json);
-                    return metadata ?? new ContainerMetadata();
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to load container metadata.");
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Saves the container metadata to the container file.
-        /// </summary>
-        public void SaveMetadata()
-        {
-           _logger.LogInformation("Saving container metadata.");
-
-            try
-            {
-                string json = JsonSerializer.Serialize(this);
-                byte[] buffer = System.Text.Encoding.UTF8.GetBytes(json);
-
-                using (FileStream fs = new FileStream(_fileIOHelper.ContainerFilePath, FileMode.OpenOrCreate, FileAccess.Write))
-                {
-                    // Assume metadata is stored at the beginning of the container file
-                    fs.Write(buffer, 0, buffer.Length);
-                    // Optionally, pad the remaining space reserved for metadata
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to save container metadata.");
-                throw;
-            }
-        }
-
-        public byte[] Serialize() {
-            return System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(this);
-        }
+    /// <summary>
+    /// Data Transfer Object for ContainerMetadata serialization.
+    /// </summary>
+    public class ContainerMetadataDto
+    {
+        public Dictionary<string, DirectoryEntry> Directories { get; set; }
+        public Dictionary<string, FileEntry> Files { get; set; }
+        public int[] FreeBlockBitmap { get; set; }
+        public string CurrentDirectory { get; set; }
+        public string ContainerFilePath { get; set; } // Added property
     }
 }

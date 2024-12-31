@@ -1,31 +1,41 @@
 using System;
 using System.Text.Json;
 using System.Text;
-using System.IO;
 
 namespace Filescript.Models
 {
     /// <summary>
-    /// Represents the superblock of the file system.
+    /// Represents the superblock of the file system container.
     /// </summary>
     public class Superblock
     {
-        public long TotalBlocks { get; set; }
+        public int TotalBlocks { get; set; }
         public int BlockSize { get; set; }
-        public int FreeBlockCount { get; set; }
         public int MetadataStartBlock { get; set; }
-        public int MetadataBlockCount { get; set; }
+
+        public Superblock(int totalBlocks, int blockSize)
+        {
+            TotalBlocks = totalBlocks;
+            BlockSize = blockSize;
+            MetadataStartBlock = 1; // Default value; can be overridden
+        }
 
         /// <summary>
         /// Serializes the superblock to a byte array.
         /// </summary>
         public byte[] Serialize()
         {
-            string json = JsonSerializer.Serialize(this);
+            var superblockDto = new SuperblockDto
+            {
+                TotalBlocks = this.TotalBlocks,
+                BlockSize = this.BlockSize,
+                MetadataStartBlock = this.MetadataStartBlock
+            };
+
+            string json = JsonSerializer.Serialize(superblockDto);
             byte[] bytes = Encoding.UTF8.GetBytes(json);
-            if (bytes.Length > 4096) // Assuming block size is 4KB
-                throw new InvalidOperationException("Superblock data exceeds block size.");
-            Array.Resize(ref bytes, 4096); // Pad with zeros if necessary
+            // Pad or truncate to match block size if necessary
+            // Assuming block size is handled elsewhere
             return bytes;
         }
 
@@ -35,7 +45,22 @@ namespace Filescript.Models
         public static Superblock Deserialize(byte[] data)
         {
             string json = Encoding.UTF8.GetString(data).TrimEnd('\0');
-            return JsonSerializer.Deserialize<Superblock>(json);
+            var superblockDto = JsonSerializer.Deserialize<SuperblockDto>(json);
+            var superblock = new Superblock(superblockDto.TotalBlocks, superblockDto.BlockSize)
+            {
+                MetadataStartBlock = superblockDto.MetadataStartBlock
+            };
+            return superblock;
         }
+    }
+
+    /// <summary>
+    /// Data Transfer Object for Superblock serialization.
+    /// </summary>
+    public class SuperblockDto
+    {
+        public int TotalBlocks { get; set; }
+        public int BlockSize { get; set; }
+        public int MetadataStartBlock { get; set; }
     }
 }

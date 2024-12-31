@@ -5,6 +5,7 @@ using System;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Filescript.Backend.Models;
+using Filescript.Backend.Services.Interfaces;
 
 namespace Filescript.Backend.Controllers {
 

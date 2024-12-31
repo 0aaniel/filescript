@@ -1,194 +1,164 @@
-using System.IO.Enumeration;
-using System.Text.Json;
+using Filescript.Backend.Exceptions;
 using Filescript.Backend.Models;
-using Filescript.Services;
-using Filescript.Utilities;
+using Filescript.Backend.Services;
+using Filescript.Backend.Utilities;
+using Filescript.Models;
+using Microsoft.Extensions.Logging;
+using System;
+using System.Threading.Tasks;
 
-namespace Filescript.Backend.Services {
+namespace Filescript.Backend.Services
+{
     /// <summary>
-    /// Service handling file operations within the container.
+    /// Service handling file operations within a specified container.
     /// </summary>
-    public class FileService : IFileService {
+    public class FileService : IFileService
+    {
         private readonly ILogger<FileService> _logger;
-        private readonly FileIOHelper _fileIOHelper;
-        private readonly IDeduplicationService _deduplicationService;
-        private readonly IResiliencyService _resiliencyService;
-        private readonly ContainerMetadata _metadata;
+        private readonly ContainerManager _containerManager;
+        private readonly string _containerName;
+        private ContainerMetadata _metadata;
+        private FileIOHelper _fileIOHelper;
+        private Superblock _superblock;
 
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="FileService"/> class.
-        /// </summary>
-        /// <param name="logger">Logger instance for logging.</param>
-        /// <param name="fileIOHelper">Helper for file I/O operations.</param>
-        /// <param name="deduplicationService">Service for handling deduplication.</param>
-        /// <param name="resiliencyService">Service for handling resiliency checks.</param>
-        public FileService(
-            ILogger<FileService> logger,
-            FileIOHelper fileIOHelper,
-            IDeduplicationService deduplicationService,
-            IResiliencyService resiliencyService
-            /*UndoRedoService undoRedoService */)
+        public FileService(ILogger<FileService> logger, ContainerManager containerManager, string containerName)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _fileIOHelper = fileIOHelper ?? throw new ArgumentNullException(nameof(fileIOHelper));
-            _deduplicationService = deduplicationService ?? throw new ArgumentNullException(nameof(deduplicationService));
-            _resiliencyService = resiliencyService ?? throw new ArgumentNullException(nameof(resiliencyService));
-            //_undoRedoService = undoRedoService ?? throw new ArgumentNullException(nameof(undoRedoService));
+            _containerManager = containerManager ?? throw new ArgumentNullException(nameof(containerManager));
+            _containerName = containerName ?? throw new ArgumentNullException(nameof(containerName));
 
-
-            _metadata = _metadata.LoadMetadata();
+            // Initialize metadata, FileIOHelper, and Superblock
+            InitializeMetadata();
         }
 
-        /// <inheritdoc />
-        public async Task<bool> CopyInAsync(string sourcePath, string destName) {
-            _logger.LogInformation("CopyInAsync: Copying file from {SourcePath} to {DestName}.", sourcePath, destName);
-
-            if (!File.Exists(sourcePath)) {
-                _logger.LogError("CopyInAsync: Source file {SourcePath} does not exist.", sourcePath);
-                throw new FileNotFoundException("Source file does not exist.", sourcePath);
-            }
-
-            try {
-                FileInfo fileInfo = new FileInfo(sourcePath);
-                long fileSize = fileInfo.Length;
-                int blockSize = _fileIOHelper.BlockSize;
-                int totalBlocks = (int)Math.Ceiling((double)fileSize / blockSize);
-                // _historyService.PushOperation(new FileOperation(fullPath, FileOperationType.Create));
-
-
-                using (FileStream fs = new FileStream(sourcePath, FileMode.Open, FileAccess.Read)) {
-                    byte[] buffer = new byte[blockSize];
-                    int bytesRead;
-
-                    while ((bytesRead = await fs.ReadAsync(buffer, 0, blockSize)) > 0) {
-                        byte[] actualData = bytesRead == blockSize ? buffer : buffer[..bytesRead];
-                        int blockIndex = await _deduplicationService.StoreBlockAsync(actualData);
-                        _metadata.FreeBlocks.Remove(blockIndex);
-                        _metadata.Files.Add(destName, new FileEntry {
-                            Name = destName,
-                            Size = fileSize,
-                            BlockIndices = new List<int> { blockIndex},
-                            CreatedAt = DateTime.UtcNow,
-                            ModifiedAt = DateTime.UtcNow
-                        });
-                    }
-                }
-
-                _metadata.SaveMetadata();
-
-                _logger.LogInformation("CopyInAsync: Successfully copied {DestName} into the container.", destName);
-                return true;
-            } catch (UnauthorizedAccessException ex) {
-                _logger.LogError(ex, "Unauthorized access when copying in file.");
-                throw;
-
-            } catch (Exception ex) {
-                _logger.LogError(ex, "An error occurred during CopyInAsync.");
-                throw;
-            }
-        }
-
-        /// <inheritdoc />
-        public async Task<bool> CopyOutAsync(string sourceName, string destPath)
+        /// <summary>
+        /// Initializes metadata, FileIOHelper, and Superblock for the container.
+        /// </summary>
+        private void InitializeMetadata()
         {
-            _logger.LogInformation("CopyOutAsync: Copying file from {SourceName} to {DestPath}", sourceName, destPath);
+            // Retrieve metadata, FileIOHelper, and Superblock from ContainerManager
+            _metadata = _containerManager.GetContainer(_containerName);
+            _fileIOHelper = _containerManager.GetFileIOHelper(_containerName);
+            _superblock = _containerManager.GetSuperblock(_containerName);
 
-            if (!_metadata.Files.TryGetValue(sourceName, out FileEntry fileEntry))
-            {
-                _logger.LogError("File not found in container: {SourceName}", sourceName);
-                throw new FileNotFoundException("File not found in container.", sourceName);
-            }
-
-            try
-            {
-                // _historyService.PushOperation(new FileOperation(fullPath, FileOperationType.Delete));
-                using (FileStream fs = new FileStream(destPath, FileMode.Create, FileAccess.Write))
-                {
-                    foreach (int blockIndex in fileEntry.BlockIndices)
-                    {
-                        // Check block integrity before reading
-                        bool isValid = await _resiliencyService.CheckBlockIntegrityAsync(blockIndex);
-                        if (!isValid)
-                        {
-                            _logger.LogError("Block integrity check failed for block index {BlockIndex}.", blockIndex);
-                            throw new IOException($"Block integrity check failed for block index {blockIndex}.");
-                        }
-
-                        byte[] data = await _fileIOHelper.ReadBlockAsync(blockIndex);
-                        await fs.WriteAsync(data, 0, data.Length);
-                    }
-                }
-
-                _logger.LogInformation("CopyOutAsync: Successfully copied {SourceName} out to {DestPath}.", sourceName, destPath);
-                return true;
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                _logger.LogError(ex, "Unauthorized access when copying out file.");
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "An error occurred during CopyOutAsync.");
-                throw;
-            }
+            // Load metadata from the metadata block
+            byte[] metadataBytes = _fileIOHelper.ReadBlock(_superblock.MetadataStartBlock);
+            _metadata = ContainerMetadata.Deserialize(metadataBytes, _superblock.BlockSize);
         }
 
-        /// <inheritdoc />
-        public async Task<bool> RemoveFileAsync(string fileName)
+        /// <summary>
+        /// Saves the current state of metadata to the metadata block.
+        /// </summary>
+        private void SaveMetadata()
         {
-            _logger.LogInformation("RemoveFileAsync: Removing file {FileName}", fileName);
-
-            if (!_metadata.Files.TryGetValue(fileName, out FileEntry fileEntry))
-            {
-                _logger.LogWarning("RemoveFileAsync: File not found: {FileName}", fileName);
-                return false;
-            }
-
-            try
-            {
-                foreach (int blockIndex in fileEntry.BlockIndices)
-                {
-                    _deduplicationService.RemoveBlock(blockIndex);
-                    _metadata.FreeBlocks.Add(blockIndex);
-                }
-
-                _metadata.Files.Remove(fileName);
-
-                // Update metadata on disk
-                _metadata.SaveMetadata();
-
-                _logger.LogInformation("RemoveFileAsync: Successfully removed {FileName}.", fileName);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "An error occurred during RemoveFileAsync.");
-                throw;
-            }
+            byte[] metadataBytes = _metadata.Serialize();
+            _fileIOHelper.WriteBlock(_superblock.MetadataStartBlock, metadataBytes);
         }
 
         /// <inheritdoc />
-        public List<FileEntry> ListFiles()
+        public async Task<bool> CreateFileAsync(string fileName, string path, byte[] content)
         {
-            _logger.LogInformation("ListFiles: Listing files in the current directory.");
+            _logger.LogInformation("FileService: Creating file '{FileName}' at path '{Path}' in container '{ContainerName}'.", fileName, path, _containerName);
 
-            try
+            // Validate inputs
+            if (string.IsNullOrWhiteSpace(fileName))
+                throw new ArgumentException("File name cannot be null or whitespace.", nameof(fileName));
+
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("Path cannot be null or whitespace.", nameof(path));
+
+            if (content == null || content.Length == 0)
+                throw new ArgumentException("Content cannot be null or empty.", nameof(content));
+
+            // Construct the full path
+            string fullPath = System.IO.Path.Combine(path, fileName).Replace("\\", "/");
+
+            // Check if file already exists
+            if (_metadata.Files.ContainsKey(fullPath))
+                throw new FileAlreadyExistsException($"File '{fullPath}' already exists.");
+
+            // Allocate necessary blocks
+            int requiredBlocks = (int)Math.Ceiling((double)content.Length / _superblock.BlockSize);
+            int startBlock = _metadata.AllocateBlock();
+
+            // Write content to blocks
+            for (int i = 0; i < requiredBlocks; i++)
             {
-                // Assuming current directory context is managed within the service or metadata
-                var files = new List<FileEntry>(_metadata.Files.Values);
-                _logger.LogInformation("ListFiles: Retrieved {FileCount} files.", files.Count);
-                return files;
+                int blockIndex = startBlock + i;
+                int bytesToWrite = Math.Min(_superblock.BlockSize, content.Length - (i * _superblock.BlockSize));
+                byte[] blockData = new byte[_superblock.BlockSize];
+                Array.Copy(content, i * _superblock.BlockSize, blockData, 0, bytesToWrite);
+                _fileIOHelper.WriteBlock(blockIndex, blockData);
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "An error occurred during ListFiles.");
-                throw;
-            }
+
+            // Create a new FileEntry
+            var fileEntry = new FileEntry(fileName, fullPath, startBlock, requiredBlocks);
+            _metadata.Files.Add(fullPath, fileEntry);
+
+            // Save metadata
+            SaveMetadata();
+
+            _logger.LogInformation("FileService: File '{FileName}' created successfully at path '{Path}' in container '{ContainerName}'.", fileName, path, _containerName);
+            return true;
         }
 
         /// <inheritdoc />
+        public async Task<byte[]> ReadFileAsync(string fileName, string path)
+        {
+            _logger.LogInformation("FileService: Reading file '{FileName}' at path '{Path}' in container '{ContainerName}'.", fileName, path, _containerName);
+
+            string fullPath = System.IO.Path.Combine(path, fileName).Replace("\\", "/");
+
+            if (!_metadata.Files.ContainsKey(fullPath))
+                throw new Exceptions.FileNotFoundException($"File '{fullPath}' does not exist.");
+
+            var fileEntry = _metadata.Files[fullPath];
+            byte[] content = new byte[fileEntry.Length * _superblock.BlockSize];
+            int bytesRead = 0;
+
+            for (int i = 0; i < fileEntry.Length; i++)
+            {
+                int blockIndex = fileEntry.StartBlock + i;
+                byte[] blockData = _fileIOHelper.ReadBlock(blockIndex);
+                Array.Copy(blockData, 0, content, bytesRead, _superblock.BlockSize);
+                bytesRead += _superblock.BlockSize;
+            }
+
+            // Trim any excess bytes
+            Array.Resize(ref content, bytesRead);
+
+            _logger.LogInformation("FileService: File '{FileName}' read successfully from path '{Path}' in container '{ContainerName}'.", fileName, path, _containerName);
+            return content;
+        }
+
+        /// <inheritdoc />
+        public async Task<bool> DeleteFileAsync(string fileName, string path)
+        {
+            _logger.LogInformation("FileService: Deleting file '{FileName}' at path '{Path}' in container '{ContainerName}'.", fileName, path, _containerName);
+
+            string fullPath = System.IO.Path.Combine(path, fileName).Replace("\\", "/");
+
+            if (!_metadata.Files.ContainsKey(fullPath))
+                throw new Exceptions.FileNotFoundException($"File '{fullPath}' does not exist.");
+
+            var fileEntry = _metadata.Files[fullPath];
+
+            // Free allocated blocks
+            for (int i = 0; i < fileEntry.Length; i++)
+            {
+                int blockIndex = fileEntry.StartBlock + i;
+                _metadata.FreeBlock(blockIndex);
+            }
+
+            // Remove file entry from metadata
+            _metadata.Files.Remove(fullPath);
+
+            // Save metadata
+            SaveMetadata();
+
+            _logger.LogInformation("FileService: File '{FileName}' deleted successfully from path '{Path}' in container '{ContainerName}'.", fileName, path, _containerName);
+            return true;
+        }
         public async Task<bool> BasicHealthCheckAsync()
         {
             _logger.LogInformation("FileService: Performing basic health check.");
@@ -203,9 +173,9 @@ namespace Filescript.Backend.Services {
                 }
 
                 // Additional checks can be added here, such as verifying container file accessibility
-                if (!File.Exists(_fileIOHelper.ContainerFilePath))
+                if (!File.Exists(_fileIOHelper.GetContainerFilePath()))
                 {
-                    _logger.LogError("FileService: Container file does not exist at {Path}.", _fileIOHelper.ContainerFilePath);
+                    _logger.LogError("FileService: Container file does not exist at {Path}.", _fileIOHelper.GetContainerFilePath());
                     return false;
                 }
 
@@ -217,6 +187,5 @@ namespace Filescript.Backend.Services {
                 _logger.LogError(ex, "FileService: Exception during basic health check.");
                 return false;
             }
-        }
-    }
+        }    }
 }
