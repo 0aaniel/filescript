@@ -97,7 +97,7 @@ namespace Filescript.Backend.Utilities
         /// </summary>
         /// <param name="blockIndex">The index of the block to write to.</param>
         /// <param name="data">The data to write.</param>
-        public async Task WriteBlockAsync(long blockIndex, byte[] data)
+        /* public async Task WriteBlockAsync(long blockIndex, byte[] data)
         {
             if (data.Length != _blockSize)
                 throw new ArgumentException($"Data must be exactly {_blockSize} bytes.", nameof(data));
@@ -107,7 +107,32 @@ namespace Filescript.Backend.Utilities
             _fileStream.Seek(blockIndex * _blockSize, SeekOrigin.Begin);
             await _fileStream.WriteAsync(data, 0, _blockSize);
             await _fileStream.FlushAsync();
+        } */
+
+        public async Task WriteBlockAsync(long blockIndex, byte[] data)
+        {
+            if (data == null)
+                throw new ArgumentNullException(nameof(data));
+
+            if (data.Length != _blockSize)
+                throw new ArgumentException($"Data must be exactly {_blockSize} bytes. (Parameter 'data')");
+
+            using (var fs = new FileStream(_containerFilePath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None))
+            {
+                long requiredSize = (blockIndex + 1) * _blockSize;
+                if (fs.Length < requiredSize)
+                {
+                    fs.SetLength(requiredSize);
+                    _logger.LogInformation("Resized file '{FilePath}' to {RequiredSize} bytes to accommodate block {BlockIndex}.", _containerFilePath, requiredSize, blockIndex);
+                }
+
+                fs.Seek(blockIndex * _blockSize, SeekOrigin.Begin);
+                await fs.WriteAsync(data, 0, data.Length);
+            }
+
+            _logger.LogDebug("Written {DataLength} bytes to block {BlockIndex}.", data.Length, blockIndex);
         }
+
 
         public void Dispose()
         {

@@ -32,7 +32,7 @@ namespace Filescript.Backend.Middleware
 
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                var response = new { message = "An unexpected error occurred. Please try again later." };
+                var response = new { message = "An unexpected error occurred. Please try again later. " + ex.Message };
                 var jsonResponse = JsonSerializer.Serialize(response);
                 await context.Response.WriteAsync(jsonResponse);
             }

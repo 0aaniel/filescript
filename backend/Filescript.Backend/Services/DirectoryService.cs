@@ -43,7 +43,7 @@ namespace Filescript.Backend.Services
 
             // Load metadata from the metadata block
             byte[] metadataBytes = _fileIOHelper.ReadBlock(_superblock.MetadataStartBlock);
-            _metadata = ContainerMetadata.Deserialize(metadataBytes, _superblock.BlockSize);
+            _metadata = ContainerMetadata.Deserialize(metadataBytes);
         }
 
         /// <summary>

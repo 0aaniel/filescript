@@ -1,6 +1,6 @@
 using Filescript.Backend.Exceptions;
 using Filescript.Backend.Services;
-using Filescript.Models;
+using Filescript.Backend.Models;
 using Microsoft.AspNetCore.Mvc;
 using System.Threading.Tasks;
 
@@ -13,11 +13,11 @@ namespace Filescript.Backend.Controllers
         private readonly ContainerManager _containerManager;
         private readonly ILogger<ContainerController> _logger;
 
-        public ContainerController(ContainerManager containerManager)
+        public ContainerController(ContainerManager containerManager, ILogger<ContainerController> logger)
         {
             _containerManager = containerManager;
+            _logger = logger;
         }
-
         
         [HttpPost("create")]
         public async Task<IActionResult> CreateContainer([FromBody] CreateContainerRequest request)
@@ -57,7 +57,7 @@ namespace Filescript.Backend.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "An unexpected error occurred while creating container '{ContainerName}'.", request.ContainerName);
-                return StatusCode(500, new { message = "An error occurred while creating the container." });
+                return StatusCode(500, new { message = "An error occurred while creating the container. " + ex.Message });
             }
         }
 
