@@ -10,3 +10,5 @@ obj/
 node_modules/
 dist/
 build/
+
+.vs
