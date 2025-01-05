@@ -216,7 +216,7 @@ namespace Filescript.Backend.Services
                     var fileServiceLogger = _loggerFactory.CreateLogger<FileService>();
 
                     // Initialize FileService with necessary dependencies
-                    var fileService = new FileService(fileServiceLogger, this, containerName);
+                    var fileService = new FileService(fileServiceLogger, this);
                     return fileService;
                 }
                 else
@@ -238,14 +238,32 @@ namespace Filescript.Backend.Services
             if (string.IsNullOrWhiteSpace(containerName))
                 throw new ArgumentException("Container name cannot be null or whitespace.", nameof(containerName));
 
+            // Try to get existing service
             if (_directoryServices.TryGetValue(containerName, out DirectoryService service))
             {
                 return service;
             }
-            else
+
+            // If container exists but service doesn't, create new service
+            if (_containers.ContainsKey(containerName))
             {
-                throw new ContainerNotFoundException($"DirectoryService for container '{containerName}' does not exist.");
+                var directoryServiceLogger = _loggerFactory.CreateLogger<DirectoryService>();
+                var newService = new DirectoryService(directoryServiceLogger, this, containerName);
+                
+                if (_directoryServices.TryAdd(containerName, newService))
+                {
+                    _logger.LogInformation("Created new DirectoryService for container '{ContainerName}'", containerName);
+                    return newService;
+                }
+                
+                // In case another thread created the service while we were creating ours
+                if (_directoryServices.TryGetValue(containerName, out service))
+                {
+                    return service;
+                }
             }
+
+            throw new ContainerNotFoundException($"Container '{containerName}' does not exist.");
         }
 
         /// <summary>

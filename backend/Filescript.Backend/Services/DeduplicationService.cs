@@ -2,7 +2,6 @@ using Filescript.Backend.Models;
 using Filescript.Backend.DataStructures;
 using Microsoft.Extensions.Logging;
 using System;
-using System.Collections.Generic;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
@@ -11,41 +10,46 @@ using Filescript.Backend.Services.Interfaces;
 using Filescript.Models;
 using Filescript.Backend.DataStructures.HashTable;
 
-namespace Filescript.Services
+namespace Filescript.Backend.Services
 {
-    /// <summary>
-    /// Service handling deduplication of data blocks.
-    /// </summary>
     public class DeduplicationService : IDeduplicationService
     {
         private readonly ILogger<DeduplicationService> _logger;
-        private readonly FileIOHelper _fileIOHelper;
-        private readonly ContainerMetadata _metadata;
-        private readonly Superblock _superblock;
+        private readonly ContainerManager _containerManager;
+        private readonly string _containerName;
         private readonly HashTable<string, int> _blockHashToIndex;
         private readonly HashTable<int, int> _blockIndexReferenceCount;
         private readonly HashTable<int, string> _blockIndexToHash;
+        private readonly Superblock _superblock;
+        private ContainerMetadata _metadata;
+        private FileIOHelper _fileIOHelper;
 
-        public DeduplicationService(ILogger<DeduplicationService> logger, FileIOHelper fileIOHelper, ContainerMetadata metadata)
+        public DeduplicationService(
+            ILogger<DeduplicationService> logger,
+            ContainerManager containerManager,
+            string containerName)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _fileIOHelper = fileIOHelper ?? throw new ArgumentNullException(nameof(fileIOHelper));
-            _metadata = metadata ?? throw new ArgumentNullException(nameof(metadata));
-
-            // Load superblock from block 0
-            byte[] superblockData = _fileIOHelper.ReadBlockAsync(0).Result;
-            _superblock = Superblock.Deserialize(superblockData);
+            _containerManager = containerManager ?? throw new ArgumentNullException(nameof(containerManager));
+            _containerName = containerName ?? throw new ArgumentNullException(nameof(containerName));
 
             // Initialize deduplication mappings
             _blockHashToIndex = new HashTable<string, int>();
             _blockIndexReferenceCount = new HashTable<int, int>();
             _blockIndexToHash = new HashTable<int, string>();
 
+            // Load container resources
+            _metadata = _containerManager.GetContainer(_containerName);
+            _fileIOHelper = _containerManager.GetFileIOHelper(_containerName);
+            _superblock = _containerManager.GetSuperblock(_containerName);
+
             LoadDeduplicationMappings();
         }
 
         private void LoadDeduplicationMappings()
         {
+            _logger.LogInformation("DeduplicationService: Loading deduplication mappings for container '{ContainerName}'.", _containerName);
+
             // Iterate through all files and populate deduplication mappings
             foreach (var file in _metadata.Files.Values)
             {
@@ -70,14 +74,14 @@ namespace Filescript.Services
                 }
             }
 
-            _logger.LogInformation("DeduplicationService: Loaded deduplication mappings.");
+            _logger.LogInformation("DeduplicationService: Deduplication mappings loaded for container '{ContainerName}'.", _containerName);
         }
 
-        /// <summary>
-        /// Stores a block of data, deduplicating if possible.
-        /// </summary>
         public async Task<int> StoreBlockAsync(byte[] data)
         {
+            if (data == null)
+                throw new ArgumentNullException(nameof(data));
+
             string hash = ComputeHash(data);
 
             if (_blockHashToIndex.TryGetValue(hash, out int existingIndex))
@@ -92,7 +96,8 @@ namespace Filescript.Services
                     _blockIndexReferenceCount.Add(existingIndex, 1);
                 }
 
-                _logger.LogInformation($"DeduplicationService: Duplicate block detected. Existing at index {existingIndex}. Incremented reference count to {(_blockIndexReferenceCount.TryGetValue(existingIndex, out int newCount) ? newCount : 1)}.");
+                _logger.LogInformation("DeduplicationService: Duplicate block detected in container '{ContainerName}'. Using existing block at index {BlockIndex}. Reference count: {Count}.",
+                    _containerName, existingIndex, _blockIndexReferenceCount.TryGetValue(existingIndex, out int newCount) ? newCount : 1);
                 return existingIndex;
             }
             else
@@ -106,14 +111,11 @@ namespace Filescript.Services
                 _blockIndexReferenceCount.Add(newBlockIndex, 1);
                 _blockIndexToHash.Add(newBlockIndex, hash);
 
-                _logger.LogInformation($"DeduplicationService: Stored new block at index {newBlockIndex} with hash {hash}.");
+                _logger.LogInformation("DeduplicationService: Stored new block in container '{ContainerName}' at index {BlockIndex}.", _containerName, newBlockIndex);
                 return newBlockIndex;
             }
         }
 
-        /// <summary>
-        /// Removes a block, decrementing its reference count and freeing it if necessary.
-        /// </summary>
         public void RemoveBlock(int blockIndex)
         {
             if (_blockIndexReferenceCount.TryGetValue(blockIndex, out int count))
@@ -121,7 +123,8 @@ namespace Filescript.Services
                 if (count > 1)
                 {
                     _blockIndexReferenceCount.Add(blockIndex, count - 1);
-                    _logger.LogInformation($"DeduplicationService: Decremented reference count for block {blockIndex} to {count - 1}.");
+                    _logger.LogInformation("DeduplicationService: Decremented reference count for block {BlockIndex} to {Count} in container '{ContainerName}'.", 
+                        blockIndex, count - 1, _containerName);
                 }
                 else
                 {
@@ -134,18 +137,17 @@ namespace Filescript.Services
 
                     // Free the block
                     _metadata.FreeBlock(blockIndex);
-                    _logger.LogInformation($"DeduplicationService: Block {blockIndex} is no longer referenced and has been freed.");
+                    _logger.LogInformation("DeduplicationService: Block {BlockIndex} in container '{ContainerName}' is no longer referenced and has been freed.", 
+                        blockIndex, _containerName);
                 }
             }
             else
             {
-                _logger.LogWarning($"DeduplicationService: Attempted to remove non-existent block {blockIndex}.");
+                _logger.LogWarning("DeduplicationService: Attempted to remove non-existent block {BlockIndex} from container '{ContainerName}'.", 
+                    blockIndex, _containerName);
             }
         }
 
-        /// <summary>
-        /// Computes the SHA-256 hash of the given data.
-        /// </summary>
         private string ComputeHash(byte[] data)
         {
             using (SHA256 sha = SHA256.Create())
@@ -157,12 +159,11 @@ namespace Filescript.Services
 
         public bool BasicHealthCheck()
         {
-            _logger.LogInformation("DeduplicationService: Performing basic health check.");
+            _logger.LogInformation("DeduplicationService: Performing basic health check for container '{ContainerName}'.", _containerName);
 
             try
             {
-                // Example health check: Verify that internal hash tables are operational
-                // Perform a dummy add and remove operation
+                // Verify that internal hash tables are operational
                 string testHash = "TEST_HASH";
                 int testIndex = 99999;
 
@@ -171,16 +172,16 @@ namespace Filescript.Services
 
                 if (!removed)
                 {
-                    _logger.LogError("DeduplicationService: Failed to remove test hash.");
+                    _logger.LogError("DeduplicationService: Health check failed for container '{ContainerName}': Could not remove test hash.", _containerName);
                     return false;
                 }
 
-                _logger.LogInformation("DeduplicationService: Basic health check passed.");
+                _logger.LogInformation("DeduplicationService: Basic health check passed for container '{ContainerName}'.", _containerName);
                 return true;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "DeduplicationService: Exception during basic health check.");
+                _logger.LogError(ex, "DeduplicationService: Exception during basic health check for container '{ContainerName}'.", _containerName);
                 return false;
             }
         }

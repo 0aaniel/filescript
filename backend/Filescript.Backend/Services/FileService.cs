@@ -16,18 +16,22 @@ namespace Filescript.Backend.Services
     {
         private readonly ILogger<FileService> _logger;
         private readonly ContainerManager _containerManager;
-        private readonly string _containerName;
+        private string _containerName;
         private ContainerMetadata _metadata;
         private FileIOHelper _fileIOHelper;
         private Superblock _superblock;
 
-        public FileService(ILogger<FileService> logger, ContainerManager containerManager, string containerName)
+        // Add a constructor for DI
+        public FileService(ILogger<FileService> logger, ContainerManager containerManager)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _containerManager = containerManager ?? throw new ArgumentNullException(nameof(containerManager));
-            _containerName = containerName ?? throw new ArgumentNullException(nameof(containerName));
+        }
 
-            // Initialize metadata, FileIOHelper, and Superblock
+        // Method to initialize container-specific data
+        public void Initialize(string containerName)
+        {
+            _containerName = containerName ?? throw new ArgumentNullException(nameof(containerName));
             InitializeMetadataAsync().GetAwaiter().GetResult();
         }
 
@@ -166,6 +170,12 @@ namespace Filescript.Backend.Services
 
             try
             {
+                // If not initialized, return true as this is a valid state for DI
+                if (_containerName == null)
+                {
+                    return true;
+                }
+
                 // Example health check: Verify if metadata is loaded and accessible
                 if (_metadata == null)
                 {

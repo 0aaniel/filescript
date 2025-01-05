@@ -1,4 +1,5 @@
 using Filescript.Backend.Middleware;
+using Filescript.Backend.Services.Interfaces;
 using Filescript.Backend.Services;
 using Filescript.Backend.Utilities;
 using Microsoft.AspNetCore.Builder;
@@ -11,20 +12,21 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<ContainerManager>();
 builder.Services.AddControllers();
 
-// Configure logging (optional, already set up by default)
+// Register HttpContextAccessor to access headers
+builder.Services.AddHttpContextAccessor();
+
+
+builder.Services.AddScoped<IFileService, FileService>();
+builder.Services.AddScoped<IResiliencyService, ResiliencyService>();
+
+// Configure logging
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 
-// Build the app
 var app = builder.Build();
 
 // Configure middleware
 app.UseMiddleware<GlobalExceptionHandlerMiddleware>();
-
 app.UseRouting();
-
-// Map controllers
 app.MapControllers();
-
-// Run the app
 app.Run();
