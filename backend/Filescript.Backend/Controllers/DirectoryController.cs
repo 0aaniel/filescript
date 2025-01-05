@@ -1,10 +1,7 @@
-using Filescript.Backend.Models.RequestModels;
-using Filescript.Backend.Services;
 using Filescript.Backend.Exceptions;
+using Filescript.Backend.Services;
 using Filescript.Models;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Logging;
-using System;
 using System.Threading.Tasks;
 using Filescript.Models.Requests;
 
@@ -240,17 +237,22 @@ namespace Filescript.Backend.Controllers
         [HttpGet("ls")]
         public IActionResult ListDirectories()
         {
-            _logger.LogInformation("Received ls request for directories.");
+            _containerManager = containerManager;
+        }
 
+        [HttpPost("create")]
+        public async Task<IActionResult> CreateDirectory(string containerName, [FromBody] CreateDirectoryRequest request)
+        {
             try
             {
-                var directories = _directoryService.ListDirectories();
+                bool result = await _containerManager.CreateDirectoryAsync(
+                    containerName,
+                    request.DirectoryName,
+                    request.Path
+                );
 
-                if (directories == null || directories.Count == 0)
-                {
-                    _logger.LogInformation("ls operation: No directories found in the current directory.");
-                    return Ok(new { message = "No directories found in the current directory.", directories = new object[] { } });
-                }
+                if (result)
+                    return Ok(new { message = $"Directory '{request.DirectoryName}' created successfully at path '{request.Path}' in container '{containerName}'." });
 
                 // Prepare response
                 var response = new object[directories.Count];
@@ -268,9 +270,36 @@ namespace Filescript.Backend.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "ls operation encountered an unexpected error.");
-                return StatusCode(500, new { message = "An unexpected error occurred during the list directories operation." });
+                // Log the exception if logging is set up
+                return StatusCode(500, new { message = "An error occurred while creating the directory." });
             }
         }
+
+        [HttpGet("list")]
+        public IActionResult ListDirectories(string containerName)
+        {
+            try
+            {
+                var directories = _containerManager.ListDirectories(containerName);
+                return Ok(new { directories });
+            }
+            catch (Exceptions.ContainerNotFoundException ex)
+            {
+                return NotFound(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                // Log the exception if logging is set up
+                return StatusCode(500, new { message = "An error occurred while listing directories." });
+            }
+        }
+
+        // Define other directory-related endpoints as needed
+    }
+
+    public class CreateDirectoryRequest
+    {
+        public string DirectoryName { get; set; }
+        public string Path { get; set; }
     }
 }

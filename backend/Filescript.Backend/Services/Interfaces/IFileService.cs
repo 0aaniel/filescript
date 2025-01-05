@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 using Filescript.Backend.Models;
 using System.Collections.Generic;
 using System.IO.Enumeration;
@@ -46,3 +47,21 @@ namespace Filescript.Backend.Services.Interfaces {
         Task<bool> BasicHealthCheckAsync();
     }
 }
+=======
+using System.Threading.Tasks;
+
+namespace Filescript.Backend.Services
+{
+    /// <summary>
+    /// Interface for file-related operations.
+    /// </summary>
+    public interface IFileService
+    {
+        Task<bool> CreateFileAsync(string fileName, string path, byte[] content);
+        Task<byte[]> ReadFileAsync(string fileName, string path);
+        Task<bool> DeleteFileAsync(string fileName, string path);
+        // Add other file-related methods as needed
+        Task<bool> BasicHealthCheckAsync();
+    }
+}
+>>>>>>> 2c7fc1d452f3d8b7ae4ae8da4de75d31f912fdd3

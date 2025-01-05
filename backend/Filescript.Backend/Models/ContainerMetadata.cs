@@ -6,6 +6,10 @@ using System.IO;
 using System.Linq;
 using Filescript.Backend.Exceptions;
 using Filescript.Backend.Models;
+<<<<<<< HEAD
+=======
+using System.IO.Compression;
+>>>>>>> 2c7fc1d452f3d8b7ae4ae8da4de75d31f912fdd3
 
 namespace Filescript.Models
 {
@@ -19,10 +23,20 @@ namespace Filescript.Models
         public List<int> FreeBlocks { get; set; }
         public string CurrentDirectory { get; set; }
         public string ContainerFilePath { get; set; } // Added property
+<<<<<<< HEAD
 
         private readonly int _blockSize;
 
         public ContainerMetadata(long totalBlocks, int blockSize = 4096)
+=======
+        public string ContainerName { get; set; }
+        public long TotalBlocks { get; set; }
+        public int BlockSize { get; set; }
+
+        private readonly int _blockSize;
+
+        public ContainerMetadata(int totalBlocks, int blockSize = 4096)
+>>>>>>> 2c7fc1d452f3d8b7ae4ae8da4de75d31f912fdd3
         {
             _blockSize = blockSize;
             Directories = new Dictionary<string, DirectoryEntry>(StringComparer.OrdinalIgnoreCase);
@@ -60,7 +74,11 @@ namespace Filescript.Models
             }
             else
             {
+<<<<<<< HEAD
                 throw new Backend.Exceptions.DirectoryAlreadyExistsException($"Directory '{directory.Path}' already exists.");
+=======
+                throw new DirectoryAlreadyExistsException($"Directory '{directory.Path}' already exists.");
+>>>>>>> 2c7fc1d452f3d8b7ae4ae8da4de75d31f912fdd3
             }
         }
 
@@ -110,6 +128,7 @@ namespace Filescript.Models
         /// </summary>
         public byte[] Serialize()
         {
+<<<<<<< HEAD
             var metadataDto = new ContainerMetadataDto
             {
                 Directories = this.Directories,
@@ -143,6 +162,77 @@ namespace Filescript.Models
                 ContainerFilePath = metadataDto.ContainerFilePath // Assign the file path
             };
             return metadata;
+=======
+            var data = new
+            {
+                ContainerName,
+                ContainerFilePath,
+                TotalBlocks,
+                BlockSize,
+                CurrentDirectory,
+                Files = Files ?? new Dictionary<string, FileEntry>(),
+                Directories = Directories ?? new Dictionary<string, DirectoryEntry>(),
+                FreeBlocks = FreeBlocks ?? new List<int>()
+            };
+
+            string jsonString = JsonSerializer.Serialize(data);
+            return Encoding.UTF8.GetBytes(jsonString);
+        }
+
+        public static ContainerMetadata Deserialize(byte[] bytes)
+        {
+            // Skip empty or invalid data
+            if (bytes == null || bytes.Length == 0 || bytes.All(b => b == 0))
+            {
+                return new ContainerMetadata(1, 4096); // Default values
+            }
+
+            try
+            {
+                // Remove trailing zeros if any
+                int lastNonZeroIndex = Array.FindLastIndex(bytes, b => b != 0);
+                if (lastNonZeroIndex >= 0)
+                {
+                    bytes = bytes.Take(lastNonZeroIndex + 1).ToArray();
+                }
+
+                string jsonString = Encoding.UTF8.GetString(bytes).TrimEnd('\0');
+                var data = JsonSerializer.Deserialize<JsonElement>(jsonString);
+
+                var metadata = new ContainerMetadata(
+                    data.GetProperty("TotalBlocks").GetInt32(),
+                    data.GetProperty("BlockSize").GetInt32()
+                )
+                {
+                    ContainerName = data.GetProperty("ContainerName").GetString(),
+                    ContainerFilePath = data.GetProperty("ContainerFilePath").GetString(),
+                    CurrentDirectory = data.GetProperty("CurrentDirectory").GetString()
+                };
+
+                // Add error handling for optional properties
+                if (data.TryGetProperty("Files", out JsonElement filesElement))
+                {
+                    metadata.Files = JsonSerializer.Deserialize<Dictionary<string, FileEntry>>(filesElement.GetRawText());
+                }
+
+                if (data.TryGetProperty("Directories", out JsonElement directoriesElement))
+                {
+                    metadata.Directories = JsonSerializer.Deserialize<Dictionary<string, DirectoryEntry>>(directoriesElement.GetRawText());
+                }
+
+                if (data.TryGetProperty("FreeBlocks", out JsonElement freeBlocksElement))
+                {
+                    metadata.FreeBlocks = JsonSerializer.Deserialize<List<int>>(freeBlocksElement.GetRawText());
+                }
+
+                return metadata;
+            }
+            catch (Exception)
+            {
+                // If deserialization fails, return a new metadata instance
+                return new ContainerMetadata(1, 4096);
+            }
+>>>>>>> 2c7fc1d452f3d8b7ae4ae8da4de75d31f912fdd3
         }
     }
 

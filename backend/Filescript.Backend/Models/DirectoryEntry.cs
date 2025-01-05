@@ -1,22 +1,17 @@
-using System;
 using System.Collections.Generic;
+using System.Text.Json;
 
 namespace Filescript.Backend.Models
 {
     /// <summary>
-    /// Represents a directory within the container.
+    /// Represents a directory entry in the container metadata.
     /// </summary>
     public class DirectoryEntry
     {
-        /// <summary>
-        /// Name of the directory.
-        /// </summary>
         public string Name { get; set; }
-
-        /// <summary>
-        /// List of subdirectories within this directory.
-        /// </summary>
+        public string Path { get; set; }
         public List<string> SubDirectories { get; set; }
+<<<<<<< HEAD
 
         /// <summary>
         /// The full (or relative) path of the directory.
@@ -74,12 +69,19 @@ namespace Filescript.Backend.Models
         {
             Name = name ?? string.Empty;
             Path = path ?? string.Empty;
+=======
+        public List<string> Files { get; set; }
+
+        public DirectoryEntry(string name, string path)
+        {
+            Name = name;
+            Path = path;
+>>>>>>> 2c7fc1d452f3d8b7ae4ae8da4de75d31f912fdd3
             SubDirectories = new List<string>();
             Files = new List<string>();
-            CreatedAt = DateTime.UtcNow;
-            ModifiedAt = DateTime.UtcNow;
         }
 
+<<<<<<< HEAD
         /// <summary>
         /// Adds a subdirectory to this directory.
         /// </summary>
@@ -94,51 +96,23 @@ namespace Filescript.Backend.Models
                 SubDirectories.Add(subDirectoryPath);
                 UpdateModificationTime();
             }
+=======
+        public void AddSubDirectory(string subDirectoryPath)
+        {
+            if (!SubDirectories.Contains(subDirectoryPath))
+                SubDirectories.Add(subDirectoryPath);
+>>>>>>> 2c7fc1d452f3d8b7ae4ae8da4de75d31f912fdd3
         }
 
-        /// <summary>
-        /// Removes a subdirectory from this directory.
-        /// </summary>
-        /// <param name="subDirectoryName">Name of the subdirectory to remove.</param>
-        public void RemoveSubDirectory(string subDirectoryName)
+        public void RemoveSubDirectory(string subDirectoryPath)
         {
-            if (SubDirectories.Remove(subDirectoryName))
-            {
-                UpdateModificationTime();
-            }
+            if (SubDirectories.Contains(subDirectoryPath))
+                SubDirectories.Remove(subDirectoryPath);
         }
 
-        /// <summary>
-        /// Adds a file to this directory.
-        /// </summary>
-        /// <param name="fileName">Name of the file to add.</param>
-        public void AddFile(string fileName)
+        public byte[] Serialize()
         {
-            if (!Files.Contains(fileName, StringComparer.OrdinalIgnoreCase))
-            {
-                Files.Add(fileName);
-                UpdateModificationTime();
-            }
-        }
-
-        /// <summary>
-        /// Removes a file from this directory.
-        /// </summary>
-        /// <param name="fileName">Name of the file to remove.</param>
-        public void RemoveFile(string fileName)
-        {
-            if (Files.Remove(fileName))
-            {
-                UpdateModificationTime();
-            }
-        }
-
-        /// <summary>
-        /// Updates the modification timestamp to the current UTC time.
-        /// </summary>
-        public void UpdateModificationTime()
-        {
-            ModifiedAt = DateTime.UtcNow;
+            return JsonSerializer.SerializeToUtf8Bytes(this);
         }
     }
 }
