@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO.Enumeration;
 using System.Threading.Tasks;
 
-namespace Filescript.Backend.Services {
+namespace Filescript.Backend.Services.Interfaces {
 
     /// <summary>
     /// Interface defining file operations within the container.

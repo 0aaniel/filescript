@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
-using Filescript.Utilities;
+using Filescript.Backend.Utilities;
+using Filescript.Backend.Services.Interfaces;
 
 namespace Filescript.Backend.Services {
 

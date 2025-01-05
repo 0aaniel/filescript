@@ -1,27 +1,23 @@
-using Filescript.Backend.Exceptions;
-using Filescript.Backend.Models;
 using Filescript.Backend.Models.RequestModels;
 using Filescript.Backend.Services;
-using Filescript.Models.RequestModels;
-using Filescript.Models.Requests;
+using Filescript.Backend.Exceptions;
+using Filescript.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Threading.Tasks;
+using Filescript.Models.Requests;
 
-namespace Filescript.Backend.Controllers {
-    
+namespace Filescript.Backend.Controllers
+{
     /// <summary>
     /// Controller responsible for handling directory-related operations within the container.
     /// </summary>
     [ApiController]
     [Route("api/[controller]")]
-    public class DirectoryController : ControllerBase {
-
+    public class DirectoryController : ControllerBase
+    {
         private readonly IDirectoryService _directoryService;
-
         private readonly ILogger<DirectoryController> _logger;
 
         /// <summary>
@@ -29,9 +25,9 @@ namespace Filescript.Backend.Controllers {
         /// </summary>
         /// <param name="directoryService">Service handling directory operations.</param>
         /// <param name="logger">Logger instance for logging.</param>
-        public DirectoryController(IDirectoryService directoryService, ILogger<DirectoryController> logger) {
+        public DirectoryController(IDirectoryService directoryService, ILogger<DirectoryController> logger)
+        {
             _directoryService = directoryService ?? throw new ArgumentNullException(nameof(directoryService));
-            // _historyService = historyService ?? throw new ArgumentNullException(nameof(historyService));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
@@ -39,47 +35,67 @@ namespace Filescript.Backend.Controllers {
         /// Creates a new directory within the container.
         /// Endpoint: POST /api/directory/md
         /// </summary>
-        /// <param name="request">Request payload containing the name of the directory to create.</param>
+        /// <param name="request">Request payload containing the name and path of the directory to create.</param>
         /// <returns>HTTP response indicating success or failure.</returns>
         [HttpPost("md")]
-        public async Task<IActionResult> MakeDirectory([FromBody] MakeDirectoryRequest request) {
-            _logger.LogInformation("Received md request: DirectoryName={DirectoryName}", request.DirectoryName);
+        public async Task<IActionResult> MakeDirectory([FromBody] MakeDirectoryRequest request)
+        {
+            _logger.LogInformation("Received md request: DirectoryName={DirectoryName}, Path={Path}", request.DirectoryName, request.Path);
 
             // Input validation
-            if (request == null) {
+            if (request == null)
+            {
                 _logger.LogWarning("md request is null.");
                 return BadRequest(new { message = "Request payload is null." });
             }
 
-            if (string.IsNullOrWhiteSpace(request.DirectoryName)) {
+            if (string.IsNullOrWhiteSpace(request.DirectoryName))
+            {
                 _logger.LogWarning("md request has empty DirectoryName.");
                 return BadRequest(new { message = "Directory name cannot be empty." });
             }
 
-            try {
-                bool result = await _directoryService.MakeDirectoryAsync(request.DirectoryName);
+            try
+            {
+                // Use the provided path or default to current directory
+                string targetPath = string.IsNullOrWhiteSpace(request.Path) ? _directoryService.GetCurrentDirectory() : request.Path;
 
-                if (result) {
-                    _logger.LogInformation("md operation successful: {DirectoryName}", request.DirectoryName);
-                    return Ok(new { message = $"Directory '{request.DirectoryName}' created successfully." });
-                } else {
-                    _logger.LogError("md operation failed for DirectoryName={DirectoryName}", request.DirectoryName);
+                bool result = await _directoryService.MakeDirectoryAsync(request.DirectoryName, targetPath);
+
+                if (result)
+                {
+                    _logger.LogInformation("md operation successful: {DirectoryName} at {Path}", request.DirectoryName, targetPath);
+                    return Ok(new { message = $"Directory '{request.DirectoryName}' created successfully at path '{targetPath}'." });
+                }
+                else
+                {
+                    _logger.LogError("md operation failed for DirectoryName={DirectoryName} at Path={Path}", request.DirectoryName, targetPath);
                     return StatusCode(500, new { message = "Failed to create the directory." });
                 }
-          
-            } catch (DirectoryAlreadyExistsException ex) {
+
+            }
+            catch (DirectoryAlreadyExistsException ex)
+            {
                 _logger.LogError(ex, "md operation failed: Directory already exists.");
                 return Conflict(new { message = "Directory already exists." });
-          
-            } catch (UnauthorizedAccessException ex) {
+            }
+            catch (Exceptions.DirectoryNotFoundException ex)
+            {
+                _logger.LogError(ex, "md operation failed: Target path does not exist.");
+                return NotFound(new { message = "Target path does not exist." });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
                 _logger.LogError(ex, "md operation failed: Unauthorized access.");
                 return StatusCode(403, new { message = "Unauthorized access to create the directory." });
-          
-            } catch (ArgumentException ex) {
+            }
+            catch (ArgumentException ex)
+            {
                 _logger.LogError(ex, "md operation failed: Invalid directory name.");
                 return BadRequest(new { message = ex.Message });
-
-            } catch (Exception ex) {
+            }
+            catch (Exception ex)
+            {
                 _logger.LogError(ex, "md operation encountered an unexpected error.");
                 return StatusCode(500, new { message = "An unexpected error occurred during the make directory operation." });
             }
@@ -92,44 +108,56 @@ namespace Filescript.Backend.Controllers {
         /// <param name="request">Request payload containing the target directory path.</param>
         /// <returns>HTTP response indicating success or failure.</returns>
         [HttpPost("cd")]
-        public async Task<IActionResult> ChangeDirectory([FromBody] ChangeDirectoryRequest request) {
+        public async Task<IActionResult> ChangeDirectory([FromBody] ChangeDirectoryRequest request)
+        {
             _logger.LogInformation("Received cd request: TargetDirectory={TargetDirectory}", request.TargetDirectory);
 
             // Input validation
-            if (request == null) {
+            if (request == null)
+            {
                 _logger.LogWarning("cd request is null.");
                 return BadRequest(new { message = "Request payload is null." });
             }
 
-            if (string.IsNullOrWhiteSpace(request.TargetDirectory)) {
+            if (string.IsNullOrWhiteSpace(request.TargetDirectory))
+            {
                 _logger.LogWarning("cd request has empty TargetDirectory.");
                 return BadRequest(new { message = "Target directory cannot be empty." });
             }
 
-            try {
+            try
+            {
                 bool result = await _directoryService.ChangeDirectoryAsync(request.TargetDirectory);
 
-                if (result) {
-                    _logger.LogInformation("cd operation successful: {TargetDirectory}", request.TargetDirectory);
-                    return Ok(new { message = $"Changed directory to '{request.TargetDirectory}'." });
-                } else {
+                if (result)
+                {
+                    string currentDir = _directoryService.GetCurrentDirectory();
+                    _logger.LogInformation("cd operation successful: Changed to {CurrentDirectory}", currentDir);
+                    return Ok(new { message = $"Changed directory to '{currentDir}'." });
+                }
+                else
+                {
                     _logger.LogError("cd operation failed for TargetDirectory={TargetDirectory}", request.TargetDirectory);
                     return NotFound(new { message = $"Directory '{request.TargetDirectory}' not found." });
                 }
-
-            } catch (DirectoryNotFoundException ex) {
+            }
+            catch (Exceptions.DirectoryNotFoundException ex)
+            {
                 _logger.LogError(ex, "cd operation failed: Directory not found.");
                 return NotFound(new { message = "Target directory not found." });
-
-            } catch (UnauthorizedAccessException ex) {
+            }
+            catch (UnauthorizedAccessException ex)
+            {
                 _logger.LogError(ex, "cd operation failed: Unauthorized access.");
                 return StatusCode(403, new { message = "Unauthorized access to the target directory." });
-
-            } catch (ArgumentException ex) {
+            }
+            catch (ArgumentException ex)
+            {
                 _logger.LogError(ex, "cd operation failed: Invalid arguments.");
                 return BadRequest(new { message = ex.Message });
-
-            } catch (Exception ex) {
+            }
+            catch (Exception ex)
+            {
                 _logger.LogError(ex, "cd operation encountered an unexpected error.");
                 return StatusCode(500, new { message = "An unexpected error occurred during the change directory operation." });
             }
@@ -139,47 +167,66 @@ namespace Filescript.Backend.Controllers {
         /// Removes a directory from the container.
         /// Endpoint: POST /api/directory/rd
         /// </summary>
-        /// <param name="request">Request payload containing the name of the directory to remove.</param>
+        /// <param name="request">Request payload containing the name and path of the directory to remove.</param>
         /// <returns>HTTP response indicating success or failure.</returns>
         [HttpPost("rd")]
-        public async Task<IActionResult> RemoveDirectory([FromBody] RemoveDirectoryRequest request) {
-            _logger.LogInformation("Received rd request: DirectoryName={DirectoryName}", request.DirectoryName);
+        public async Task<IActionResult> RemoveDirectory([FromBody] RemoveDirectoryRequest request)
+        {
+            _logger.LogInformation("Received rd request: DirectoryName={DirectoryName}, Path={Path}", request.DirectoryName, request.Path);
 
             // Input Validation
-            if (request == null) {
+            if (request == null)
+            {
                 _logger.LogWarning("rd request is null.");
                 return BadRequest(new { message = "Request payload is null." });
             }
 
-            if (string.IsNullOrWhiteSpace(request.DirectoryName)) {
+            if (string.IsNullOrWhiteSpace(request.DirectoryName))
+            {
                 _logger.LogWarning("rd request has empty DirectoryName.");
                 return BadRequest(new { message = "DirectoryName cannot be empty." });
             }
 
-            try {
-                bool result = await _directoryService.RemoveDirectoryAsync(request.DirectoryName);
+            try
+            {
+                // Use the provided path or default to current directory
+                string targetPath = string.IsNullOrWhiteSpace(request.Path) ? _directoryService.GetCurrentDirectory() : request.Path;
 
-                if (result) {
-                    _logger.LogInformation("rd operation successful: {DirectoryName}", request.DirectoryName);
-                    return Ok(new { message = $"Directory '{request.DirectoryName}' removed successfully." });
-                } else {
-                    _logger.LogError("rd operation failed for DirectoryName={DirectoryName}", request.DirectoryName);
-                    return NotFound(new { message = $"Directory '{request.DirectoryName}' not found." });
+                bool result = await _directoryService.RemoveDirectoryAsync(request.DirectoryName, targetPath);
+
+                if (result)
+                {
+                    _logger.LogInformation("rd operation successful: {DirectoryName} at {Path}", request.DirectoryName, targetPath);
+                    return Ok(new { message = $"Directory '{request.DirectoryName}' removed successfully from path '{targetPath}'." });
+                }
+                else
+                {
+                    _logger.LogError("rd operation failed for DirectoryName={DirectoryName} at Path={Path}", request.DirectoryName, targetPath);
+                    return NotFound(new { message = $"Directory '{request.DirectoryName}' not found at path '{targetPath}'." });
                 }
             }
-            catch (DirectoryNotEmptyException ex) {
+            catch (DirectoryNotEmptyException ex)
+            {
                 _logger.LogError(ex, "rd operation failed: Directory not empty.");
                 return BadRequest(new { message = "Cannot remove a non-empty directory." });
-            
-            } catch (UnauthorizedAccessException ex) {
+            }
+            catch (Exceptions.DirectoryNotFoundException ex)
+            {
+                _logger.LogError(ex, "rd operation failed: Directory not found.");
+                return NotFound(new { message = "Directory not found." });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
                 _logger.LogError(ex, "rd operation failed: Unauthorized access.");
                 return StatusCode(403, new { message = "Unauthorized access to remove the directory." });
-            
-            } catch (ArgumentException ex) {
+            }
+            catch (ArgumentException ex)
+            {
                 _logger.LogError(ex, "rd operation failed: Invalid arguments.");
                 return BadRequest(new { message = ex.Message });
-           
-            } catch (Exception ex) {
+            }
+            catch (Exception ex)
+            {
                 _logger.LogError(ex, "rd operation encountered an unexpected error.");
                 return StatusCode(500, new { message = "An unexpected error occurred during the remove directory operation." });
             }
@@ -189,7 +236,7 @@ namespace Filescript.Backend.Controllers {
         /// Lists all directories in the current directory of the container.
         /// Endpoint: GET /api/directory/ls
         /// </summary>
-        /// <returns>HTTP response containing a list of directories with their names.</returns>
+        /// <returns>HTTP response containing a list of directories with their names and paths.</returns>
         [HttpGet("ls")]
         public IActionResult ListDirectories()
         {
@@ -211,7 +258,8 @@ namespace Filescript.Backend.Controllers {
                 {
                     response[i] = new
                     {
-                        Name = directories[i].Name
+                        Name = directories[i].Name,
+                        Path = directories[i].Path
                     };
                 }
 

@@ -1,5 +1,5 @@
 
-namespace Filescript.Backend.Services {
+namespace Filescript.Backend.Services.Interfaces {
     /// <summary>
     /// Interface defining deduplication operations.
     /// </summary>

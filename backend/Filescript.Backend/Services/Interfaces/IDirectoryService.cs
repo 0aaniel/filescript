@@ -1,14 +1,15 @@
+using Filescript.Backend.Models;
 using Filescript.Models;
 
-namespace Filescript.Backend.Services {
+namespace Filescript.Backend.Services.Interfaces {
     /// <summary>
     /// Interface defining directory operations within the container.
     /// </summary>
     public interface IDirectoryService
     {
-        Task MakeDirectoryAsync(string directoryName, string path);
-        Task ChangeDirectoryAsync(string targetDirectory);
-        Task RemoveDirectoryAsync(string directoryName, string path);
+        Task<bool> MakeDirectoryAsync(string directoryName, string path);
+        Task<bool> ChangeDirectoryAsync(string targetDirectory);
+        Task<bool> RemoveDirectoryAsync(string directoryName, string path);
         List<DirectoryEntry> ListDirectories();
 
         /// <summary>

@@ -3,7 +3,7 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 
-namespace Filescript.Utilities
+namespace Filescript.Backend.Utilities
 {
     /// <summary>
     /// Helper class for handling low-level file I/O operations with the container file.
@@ -112,6 +112,40 @@ namespace Filescript.Utilities
             _logger.LogInformation("Read data from block {BlockIndex} at position {Position}. Bytes read: {BytesRead}.", blockIndex, position, bytesRead);
 
             return buffer;
+        }
+
+        /// <summary>
+        /// Initializes the container by setting up the required number of blocks.
+        /// </summary>
+        /// <param name="totalBlocks">Total number of blocks to initialize.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        public async Task InitializeContainerAsync(long totalBlocks)
+        {
+            try
+            {
+                if (!File.Exists(_containerFilePath))
+                {
+                    using (FileStream fs = new FileStream(_containerFilePath, FileMode.CreateNew, FileAccess.Write))
+                    {
+                        _logger.LogInformation("Initializing container with {TotalBlocks} blocks.", totalBlocks);
+                        byte[] emptyBlock = new byte[_blockSize];
+                        for (long i = 0; i < totalBlocks; i++)
+                        {
+                            await fs.WriteAsync(emptyBlock, 0, _blockSize);
+                        }
+                    }
+                    _logger.LogInformation("Container file '{ContainerFilePath}' initialized with {TotalBlocks} blocks.", _containerFilePath, totalBlocks);
+                }
+                else
+                {
+                    _logger.LogInformation("Container file '{ContainerFilePath}' already exists. Skipping initialization.", _containerFilePath);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error initializing container file '{ContainerFilePath}'.", _containerFilePath);
+                throw;
+            }
         }
 
         /// <summary>

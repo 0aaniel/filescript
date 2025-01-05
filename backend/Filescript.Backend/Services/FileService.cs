@@ -1,19 +1,23 @@
 using System.IO.Enumeration;
 using System.Text.Json;
 using Filescript.Backend.Models;
-using Filescript.Services;
-using Filescript.Utilities;
+using Filescript.Backend.Utilities;
+using Filescript.Models;
+using Filescript.Backend.Services.Interfaces;
 
 namespace Filescript.Backend.Services {
     /// <summary>
     /// Service handling file operations within the container.
     /// </summary>
     public class FileService : IFileService {
-        private readonly ILogger<FileService> _logger;
-        private readonly FileIOHelper _fileIOHelper;
-        private readonly IDeduplicationService _deduplicationService;
-        private readonly IResiliencyService _resiliencyService;
-        private readonly ContainerMetadata _metadata;
+        private ILogger<FileService> _logger;
+        private FileIOHelper _fileIOHelper;
+        private IDeduplicationService _deduplicationService;
+        private IResiliencyService _resiliencyService;
+        private ContainerMetadata _metadata;
+        private ContainerManager _containerManager;
+        private string _containerName;
+        private Superblock _superblock;
 
 
         /// <summary>
@@ -37,7 +41,22 @@ namespace Filescript.Backend.Services {
             //_undoRedoService = undoRedoService ?? throw new ArgumentNullException(nameof(undoRedoService));
 
 
-            _metadata = _metadata.LoadMetadata();
+            InitializeMetadata();
+        }
+
+        /// <summary>
+        /// Initializes metadata, FileIOHelper, and Superblock for the container.
+        /// </summary>
+        private async void InitializeMetadata()
+        {
+            // Retrieve metadata, FileIOHelper, and Superblock from ContainerManager
+            _metadata = _containerManager.GetContainer(_containerName);
+            _fileIOHelper = _containerManager.GetFileIOHelper(_containerName);
+            _superblock = _containerManager.GetSuperblock(_containerName);
+
+            // Load metadata from the metadata block
+            byte[] metadataBytes = await _fileIOHelper.ReadBlockAsync(_superblock.MetadataStartBlock);
+            _metadata = ContainerMetadata.Deserialize(metadataBytes, _superblock.BlockSize);
         }
 
         /// <inheritdoc />
@@ -75,7 +94,7 @@ namespace Filescript.Backend.Services {
                     }
                 }
 
-                _metadata.SaveMetadata();
+                // _metadata.SaveMetadata();
 
                 _logger.LogInformation("CopyInAsync: Successfully copied {DestName} into the container.", destName);
                 return true;
@@ -157,7 +176,7 @@ namespace Filescript.Backend.Services {
                 _metadata.Files.Remove(fileName);
 
                 // Update metadata on disk
-                _metadata.SaveMetadata();
+                // _metadata.SaveMetadata();
 
                 _logger.LogInformation("RemoveFileAsync: Successfully removed {FileName}.", fileName);
                 return true;
@@ -218,5 +237,7 @@ namespace Filescript.Backend.Services {
                 return false;
             }
         }
+
+        
     }
 }

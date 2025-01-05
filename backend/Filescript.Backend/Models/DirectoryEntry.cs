@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace Filescript.Models
+namespace Filescript.Backend.Models
 {
     /// <summary>
     /// Represents a directory within the container.
@@ -17,6 +17,11 @@ namespace Filescript.Models
         /// List of subdirectories within this directory.
         /// </summary>
         public List<string> SubDirectories { get; set; }
+
+        /// <summary>
+        /// The full (or relative) path of the directory.
+        /// </summary>
+        public string Path { get; set; }
 
         /// <summary>
         /// List of files within this directory.
@@ -38,6 +43,8 @@ namespace Filescript.Models
         /// </summary>
         public DirectoryEntry()
         {
+            Name = string.Empty;
+            Path = string.Empty;
             SubDirectories = new List<string>();
             Files = new List<string>();
             CreatedAt = DateTime.UtcNow;
@@ -50,7 +57,23 @@ namespace Filescript.Models
         /// <param name="name">Name of the directory.</param>
         public DirectoryEntry(string name)
         {
-            Name = name;
+            Name = name ?? string.Empty;
+            Path = name ?? string.Empty;
+            SubDirectories = new List<string>();
+            Files = new List<string>();
+            CreatedAt = DateTime.UtcNow;
+            ModifiedAt = DateTime.UtcNow;
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="DirectoryEntry"/> class with a specified name and path.
+        /// </summary>
+        /// <param name="name">Friendly or display name of the directory.</param>
+        /// <param name="path">Full or relative path of the directory.</param>
+        public DirectoryEntry(string name, string path)
+        {
+            Name = name ?? string.Empty;
+            Path = path ?? string.Empty;
             SubDirectories = new List<string>();
             Files = new List<string>();
             CreatedAt = DateTime.UtcNow;
@@ -61,11 +84,14 @@ namespace Filescript.Models
         /// Adds a subdirectory to this directory.
         /// </summary>
         /// <param name="subDirectoryName">Name of the subdirectory to add.</param>
-        public void AddSubDirectory(string subDirectoryName)
+        public void AddSubDirectory(string subDirectoryPath)
         {
-            if (!SubDirectories.Contains(subDirectoryName, StringComparer.OrdinalIgnoreCase))
+            if (string.IsNullOrWhiteSpace(subDirectoryPath))
+                throw new ArgumentException("Subdirectory path cannot be null or whitespace.", nameof(subDirectoryPath));
+
+            if (!SubDirectories.Contains(subDirectoryPath, StringComparer.OrdinalIgnoreCase))
             {
-                SubDirectories.Add(subDirectoryName);
+                SubDirectories.Add(subDirectoryPath);
                 UpdateModificationTime();
             }
         }

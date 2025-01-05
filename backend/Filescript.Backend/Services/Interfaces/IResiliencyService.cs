@@ -1,6 +1,6 @@
 using System.Threading.Tasks;
 
-namespace Filescript.Backend.Services
+namespace Filescript.Backend.Services.Interfaces
 {
     /// <summary>
     /// Interface defining resiliency operations.
