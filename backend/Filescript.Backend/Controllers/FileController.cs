@@ -45,7 +45,7 @@ namespace Filescript.Backend.Controllers
             catch (Exception ex)
             {
                 // Log the exception if logging is set up
-                return StatusCode(500, new { message = "An error occurred while creating the file." });
+                return StatusCode(500, new { message = "An error occurred while creating the file: " + ex.Message });
             }
         }
 

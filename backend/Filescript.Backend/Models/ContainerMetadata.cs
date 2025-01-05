@@ -114,41 +114,75 @@ namespace Filescript.Models
         /// </summary>
         public byte[] Serialize()
         {
-            var options = new JsonSerializerOptions
+            var data = new
             {
-                IgnoreNullValues = true,
-                WriteIndented = false,
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                ContainerName,
+                ContainerFilePath,
+                TotalBlocks,
+                BlockSize,
+                CurrentDirectory,
+                Files = Files ?? new Dictionary<string, FileEntry>(),
+                Directories = Directories ?? new Dictionary<string, DirectoryEntry>(),
+                FreeBlocks = FreeBlocks ?? new List<int>()
             };
-            return JsonSerializer.SerializeToUtf8Bytes(this, options);
+
+            string jsonString = JsonSerializer.Serialize(data);
+            return Encoding.UTF8.GetBytes(jsonString);
         }
 
-        public static ContainerMetadata Deserialize(byte[] compressedBytes)
+        public static ContainerMetadata Deserialize(byte[] bytes)
         {
-            using (var inputStream = new MemoryStream(compressedBytes))
-            using (var gzip = new GZipStream(inputStream, CompressionMode.Decompress))
-            using (var decompressedStream = new MemoryStream())
+            // Skip empty or invalid data
+            if (bytes == null || bytes.Length == 0 || bytes.All(b => b == 0))
             {
-                gzip.CopyTo(decompressedStream);
-                return JsonSerializer.Deserialize<ContainerMetadata>(decompressedStream.ToArray());
+                return new ContainerMetadata(1, 4096); // Default values
             }
-        }
-        /// <summary>
-        /// Deserializes the metadata from a byte array.
-        /// </summary>
-        public static ContainerMetadata Deserialize(byte[] data, int blockSize = 4096)
-        {
-            string json = Encoding.UTF8.GetString(data).TrimEnd('\0');
-            var metadataDto = JsonSerializer.Deserialize<ContainerMetadataDto>(json);
-            var metadata = new ContainerMetadata(metadataDto.FreeBlockBitmap.Length, blockSize)
+
+            try
             {
-                Directories = metadataDto.Directories,
-                Files = metadataDto.Files,
-                CurrentDirectory = metadataDto.CurrentDirectory,
-                FreeBlocks = metadataDto.FreeBlockBitmap.ToList(),
-                ContainerFilePath = metadataDto.ContainerFilePath // Assign the file path
-            };
-            return metadata;
+                // Remove trailing zeros if any
+                int lastNonZeroIndex = Array.FindLastIndex(bytes, b => b != 0);
+                if (lastNonZeroIndex >= 0)
+                {
+                    bytes = bytes.Take(lastNonZeroIndex + 1).ToArray();
+                }
+
+                string jsonString = Encoding.UTF8.GetString(bytes).TrimEnd('\0');
+                var data = JsonSerializer.Deserialize<JsonElement>(jsonString);
+
+                var metadata = new ContainerMetadata(
+                    data.GetProperty("TotalBlocks").GetInt32(),
+                    data.GetProperty("BlockSize").GetInt32()
+                )
+                {
+                    ContainerName = data.GetProperty("ContainerName").GetString(),
+                    ContainerFilePath = data.GetProperty("ContainerFilePath").GetString(),
+                    CurrentDirectory = data.GetProperty("CurrentDirectory").GetString()
+                };
+
+                // Add error handling for optional properties
+                if (data.TryGetProperty("Files", out JsonElement filesElement))
+                {
+                    metadata.Files = JsonSerializer.Deserialize<Dictionary<string, FileEntry>>(filesElement.GetRawText());
+                }
+
+                if (data.TryGetProperty("Directories", out JsonElement directoriesElement))
+                {
+                    metadata.Directories = JsonSerializer.Deserialize<Dictionary<string, DirectoryEntry>>(directoriesElement.GetRawText());
+                }
+
+                if (data.TryGetProperty("FreeBlocks", out JsonElement freeBlocksElement))
+                {
+                    metadata.FreeBlocks = JsonSerializer.Deserialize<List<int>>(freeBlocksElement.GetRawText());
+                }
+
+                return metadata;
+            }
+            catch (Exception)
+            {
+                // If deserialization fails, return a new metadata instance
+                return new ContainerMetadata(1, 4096);
+            }
         }
     }
 

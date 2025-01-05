@@ -34,7 +34,7 @@ namespace Filescript.Backend.Services
         /// <summary>
         /// Initializes metadata, FileIOHelper, and Superblock for the container.
         /// </summary>
-        private void InitializeMetadata()
+        private async void InitializeMetadata()
         {
             // Retrieve metadata, FileIOHelper, and Superblock from ContainerManager
             _metadata = _containerManager.GetContainer(_containerName);
@@ -42,17 +42,17 @@ namespace Filescript.Backend.Services
             _superblock = _containerManager.GetSuperblock(_containerName);
 
             // Load metadata from the metadata block
-            byte[] metadataBytes = _fileIOHelper.ReadBlock(_superblock.MetadataStartBlock);
+            byte[] metadataBytes = await _fileIOHelper.ReadBlockAsync(_superblock.MetadataStartBlock);
             _metadata = ContainerMetadata.Deserialize(metadataBytes);
         }
 
         /// <summary>
         /// Saves the current state of metadata to the metadata block.
         /// </summary>
-        private void SaveMetadata()
+        private async void SaveMetadata()
         {
             byte[] metadataBytes = _metadata.Serialize();
-            _fileIOHelper.WriteBlock(_superblock.MetadataStartBlock, metadataBytes);
+            await _fileIOHelper.WriteBlockAsync(_superblock.MetadataStartBlock, metadataBytes);
         }
 
         /// <inheritdoc />

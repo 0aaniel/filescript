@@ -28,13 +28,13 @@ namespace Filescript.Backend.Services
             _containerName = containerName ?? throw new ArgumentNullException(nameof(containerName));
 
             // Initialize metadata, FileIOHelper, and Superblock
-            InitializeMetadata();
+            InitializeMetadataAsync().GetAwaiter().GetResult();
         }
 
         /// <summary>
         /// Initializes metadata, FileIOHelper, and Superblock for the container.
         /// </summary>
-        private void InitializeMetadata()
+        private async Task InitializeMetadataAsync()
         {
             // Retrieve metadata, FileIOHelper, and Superblock from ContainerManager
             _metadata = _containerManager.GetContainer(_containerName);
@@ -42,17 +42,17 @@ namespace Filescript.Backend.Services
             _superblock = _containerManager.GetSuperblock(_containerName);
 
             // Load metadata from the metadata block
-            byte[] metadataBytes = _fileIOHelper.ReadBlock(_superblock.MetadataStartBlock);
+            byte[] metadataBytes = await _fileIOHelper.ReadBlockAsync(_superblock.MetadataStartBlock);
             _metadata = ContainerMetadata.Deserialize(metadataBytes);
         }
 
         /// <summary>
         /// Saves the current state of metadata to the metadata block.
         /// </summary>
-        private void SaveMetadata()
+        private async Task SaveMetadataAsync()
         {
             byte[] metadataBytes = _metadata.Serialize();
-            _fileIOHelper.WriteBlock(_superblock.MetadataStartBlock, metadataBytes);
+            await _fileIOHelper.WriteBlockAsync(_superblock.MetadataStartBlock, metadataBytes);
         }
 
         /// <inheritdoc />
@@ -88,7 +88,7 @@ namespace Filescript.Backend.Services
                 int bytesToWrite = Math.Min(_superblock.BlockSize, content.Length - (i * _superblock.BlockSize));
                 byte[] blockData = new byte[_superblock.BlockSize];
                 Array.Copy(content, i * _superblock.BlockSize, blockData, 0, bytesToWrite);
-                _fileIOHelper.WriteBlock(blockIndex, blockData);
+                await _fileIOHelper.WriteBlockAsync(blockIndex, blockData);
             }
 
             // Create a new FileEntry
@@ -96,7 +96,7 @@ namespace Filescript.Backend.Services
             _metadata.Files.Add(fullPath, fileEntry);
 
             // Save metadata
-            SaveMetadata();
+            await SaveMetadataAsync();
 
             _logger.LogInformation("FileService: File '{FileName}' created successfully at path '{Path}' in container '{ContainerName}'.", fileName, path, _containerName);
             return true;
@@ -119,7 +119,7 @@ namespace Filescript.Backend.Services
             for (int i = 0; i < fileEntry.Length; i++)
             {
                 int blockIndex = fileEntry.StartBlock + i;
-                byte[] blockData = _fileIOHelper.ReadBlock(blockIndex);
+                byte[] blockData = await _fileIOHelper.ReadBlockAsync(blockIndex);
                 Array.Copy(blockData, 0, content, bytesRead, _superblock.BlockSize);
                 bytesRead += _superblock.BlockSize;
             }
@@ -154,11 +154,12 @@ namespace Filescript.Backend.Services
             _metadata.Files.Remove(fullPath);
 
             // Save metadata
-            SaveMetadata();
+            await SaveMetadataAsync();
 
             _logger.LogInformation("FileService: File '{FileName}' deleted successfully from path '{Path}' in container '{ContainerName}'.", fileName, path, _containerName);
             return true;
         }
+
         public async Task<bool> BasicHealthCheckAsync()
         {
             _logger.LogInformation("FileService: Performing basic health check.");
@@ -187,5 +188,6 @@ namespace Filescript.Backend.Services
                 _logger.LogError(ex, "FileService: Exception during basic health check.");
                 return false;
             }
-        }    }
+        }
+    }
 }

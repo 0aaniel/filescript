@@ -33,98 +33,160 @@ namespace Filescript.Backend.Services
             _directoryServices = new ConcurrentDictionary<string, DirectoryService>();
         }
 
+        private bool IsFileLocked(string filePath)
+        {
+            try
+            {
+                if (!File.Exists(filePath))
+                {
+                    _logger.LogDebug("File '{FilePath}' does not exist. Skipping file lock check.", filePath);
+                    return false;
+                }
+
+                using (var stream = File.Open(filePath, FileMode.Open, FileAccess.Read, FileShare.None))
+                {
+                    stream.Close();
+                }
+                
+                return false;
+            }
+            catch (IOException)
+            {
+                return true;
+            }
+        }
         /// <summary>
         /// Creates a new container with the specified name and file path.
         /// </summary>
-        public async Task<bool> CreateContainerAsync(string containerName, string containerFilePath, int totalBlocks, int blockSize = 4096)
+        public async Task<bool> CreateContainerAsync(string containerName, string containerFilePath, int totalBlocks = 1, int blockSize = 4096)
         {
-            try {
-                if (string.IsNullOrWhiteSpace(containerName))
-                    throw new ArgumentException("Container name cannot be null or whitespace.", nameof(containerName));
+            const int MinBlockSize = 512; // Define a minimum block size
 
-                if (string.IsNullOrWhiteSpace(containerFilePath))
-                    throw new ArgumentException("Container file path cannot be null or whitespace.", nameof(containerFilePath));
+            _logger.LogInformation("Starting container creation: Name={ContainerName}, FilePath={ContainerFilePath}, TotalBlocks={TotalBlocks}, BlockSize={BlockSize}", containerName, containerFilePath, totalBlocks, blockSize);
 
-                containerName = containerName.Trim(); // Trim whitespaces
+            if (blockSize < MinBlockSize)
+            {
+                _logger.LogError("Invalid block size: {BlockSize}. It must be at least {MinBlockSize} bytes.", blockSize, MinBlockSize);
+                throw new ArgumentException($"Block size must be at least {MinBlockSize} bytes.", nameof(blockSize));
+            }
 
-                // Log existing containers before checking
-                _logger.LogDebug("Existing containers before creation attempt: {Containers}", string.Join(", ", _containers.Keys));
-
-                if (_containers.ContainsKey(containerName))
-                    throw new ContainerAlreadyExistsException($"A container with the name '{containerName}' already exists.");
-
-                // Instantiate ContainerMetadata first
-                var metadata = new ContainerMetadata(totalBlocks, blockSize)
+            if (totalBlocks <= 0)
+            {
+                _logger.LogError("Invalid total blocks: {TotalBlocks}. It must be a positive integer.", totalBlocks);
+                throw new ArgumentException("Total blocks must be a positive integer.", nameof(totalBlocks));
+            }
+                try
                 {
-                    ContainerName = containerName,
-                    ContainerFilePath = containerFilePath
-                };
+                    if (IsFileLocked(containerFilePath))
+                    {
+                        _logger.LogWarning("File '{FilePath}' is locked by another process. Retrying...", containerFilePath);
+                    }
 
-                // Serialize metadata
-                byte[] metadataBytes = metadata.Serialize();
-                _logger.LogDebug("Serialized metadata size: {Size} bytes.", metadataBytes.Length);
+                    if (string.IsNullOrWhiteSpace(containerName))
+                        throw new ArgumentException("Container name cannot be null or whitespace.", nameof(containerName));
 
-                if (metadataBytes.Length > blockSize)
-                {
-                    _logger.LogError("Serialized metadata size ({Size} bytes) exceeds block size ({BlockSize} bytes).", metadataBytes.Length, blockSize);
-                    throw new InvalidOperationException("Metadata data exceeds block size.");
-                }
+                    if (string.IsNullOrWhiteSpace(containerFilePath))
+                        throw new ArgumentException("Container file path cannot be null or whitespace.", nameof(containerFilePath));
 
-                lock (_lock)
-                {
+                    containerName = containerName.Trim(); // Trim whitespaces
+
                     if (_containers.ContainsKey(containerName))
                         throw new ContainerAlreadyExistsException($"A container with the name '{containerName}' already exists.");
 
-                    // Ensure the directory exists
-                    var directoryPath = Path.GetDirectoryName(containerFilePath);
-                    if (!Directory.Exists(directoryPath))
+                    var metadata = new ContainerMetadata(totalBlocks, blockSize)
                     {
-                        Directory.CreateDirectory(directoryPath);
-                        _logger.LogInformation("Directory '{DirectoryPath}' created successfully.", directoryPath);
+                        ContainerName = containerName,
+                        ContainerFilePath = containerFilePath
+                    };
+
+                    byte[] metadataBytes = metadata.Serialize();
+                    
+                    // Create padded array
+                    byte[] paddedMetadataBytes = new byte[blockSize];
+                    if (metadataBytes.Length > blockSize)
+                    {
+                        _logger.LogError("Serialized metadata size ({Size} bytes) exceeds block size ({BlockSize} bytes).", metadataBytes.Length, blockSize);
+                        throw new InvalidOperationException("Metadata data exceeds block size.");
                     }
 
-                    // Initialize FileIOHelper and other services
-                    var fileIOLogger = _loggerFactory.CreateLogger<FileIOHelper>();
-                    var newFileIOHelper = new FileIOHelper(fileIOLogger, containerFilePath, blockSize);
-                    _fileIOHelpers.TryAdd(containerName, newFileIOHelper);
-
-                    _containers.TryAdd(containerName, metadata);
-
-                    var superblock = new Superblock(totalBlocks, blockSize)
+                    // Copy metadata bytes to padded array
+                    Array.Copy(metadataBytes, paddedMetadataBytes, metadataBytes.Length);
+                    
+                    lock (_lock)
                     {
-                        TotalBlocks = totalBlocks,
-                        BlockSize = blockSize,
-                        MetadataStartBlock = 1 // Assuming block 0 is reserved
-                    };
-                    _superblocks.TryAdd(containerName, superblock);
+                        var directoryPath = Path.GetDirectoryName(containerFilePath);
+                        if (!Directory.Exists(directoryPath))
+                        {
+                            if (directoryPath != null)
+                            {
+                                Directory.CreateDirectory(directoryPath);
+                            }
+                            else
+                            {
+                                throw new ArgumentException("Directory path cannot be null.", nameof(directoryPath));
+                            }
+                            _logger.LogInformation("Directory '{DirectoryPath}' created successfully.", directoryPath);
+                        }
 
-                    // Initialize the container file
-                    newFileIOHelper.InitializeContainerAsync(totalBlocks).GetAwaiter().GetResult();
-                    _logger.LogInformation("Container file '{ContainerFilePath}' initialized with {TotalBlocks} blocks.", containerFilePath, totalBlocks);
+                        var fileIOLogger = _loggerFactory.CreateLogger<FileIOHelper>();
+                        var newFileIOHelper = new FileIOHelper(fileIOLogger, containerFilePath, blockSize);
+                        _fileIOHelpers.TryAdd(containerName, newFileIOHelper);
 
-                    // Write metadata to the container's metadata block
-                    newFileIOHelper.WriteBlockAsync(superblock.MetadataStartBlock, metadataBytes).Wait();
-                    _logger.LogInformation("Metadata written to block {MetadataStartBlock}.", superblock.MetadataStartBlock);
+                        _containers.TryAdd(containerName, metadata);
 
-                    var directoryServiceLogger = _loggerFactory.CreateLogger<DirectoryService>();
-                    var directoryService = new DirectoryService(directoryServiceLogger, this, containerName);
-                    _directoryServices.TryAdd(containerName, directoryService);
+                        var superblock = new Superblock(totalBlocks, blockSize)
+                        {
+                            TotalBlocks = totalBlocks,
+                            BlockSize = blockSize,
+                            MetadataStartBlock = 1
+                        };
+                        _superblocks.TryAdd(containerName, superblock);
 
-                    _logger.LogInformation("ContainerManager: Container '{ContainerName}' created successfully at '{ContainerFilePath}'.", containerName, containerFilePath);
-                    return true;
+                        try
+                        {
+                            newFileIOHelper.InitializeContainerAsync(totalBlocks).GetAwaiter().GetResult();
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError("Error initializing container '{ContainerName}': {ErrorMessage}", containerName, ex.Message);
+                            throw;
+                        }
+
+                        _logger.LogInformation("Container file '{ContainerFilePath}' initialized with {TotalBlocks} blocks.", containerFilePath, totalBlocks);
+
+                        newFileIOHelper.WriteBlockAsync(superblock.MetadataStartBlock, paddedMetadataBytes).Wait();
+                        _logger.LogInformation("Metadata written to block {MetadataStartBlock}.", superblock.MetadataStartBlock);
+
+                        var directoryServiceLogger = _loggerFactory.CreateLogger<DirectoryService>();
+                        var directoryService = new DirectoryService(directoryServiceLogger, this, containerName);
+                        _directoryServices.TryAdd(containerName, directoryService);
+
+                        _logger.LogInformation("ContainerManager: Container '{ContainerName}' created successfully at '{ContainerFilePath}'.", containerName, containerFilePath);
+                        return true;
+                    }
                 }
-            } catch (Exception ex) {
-                _logger.LogError("ContainerManager: Error creating container '{ContainerName}': {ErrorMessage}\nAttempting cleanup:", containerName, ex.Message);
-                try {
-                    File.Delete(containerFilePath);
-                    _logger.LogInformation("ContainerManager: Deleting container file '{ContainerFilePath}' due to errors.", containerFilePath);
-                    return false;
-                } catch (Exception ex2) {
-                    _logger.LogError("ContainerManager: Error deleting container file '{ContainerFilePath}': {ErrorMessage}", containerFilePath, ex2.Message);
-                    return false;
+                catch (IOException ex)
+                {
+                    _logger.LogError($"Error creating container '{containerName}': {ex.Message}. Retrying in {1000}ms...");
+                    await Task.Delay(1000);
                 }
-            }
+                catch (Exception ex)
+                {
+                    _logger.LogError("ContainerManager: Error creating container '{ContainerName}': {ErrorMessage}\nAttempting cleanup:", containerName, ex.Message);
+                    try
+                    {
+                        File.Delete(containerFilePath);
+                        _logger.LogInformation("ContainerManager: Deleting container file '{ContainerFilePath}' due to errors.", containerFilePath);
+                    }
+                    catch (Exception ex2)
+                    {
+                        _logger.LogError("ContainerManager: Error deleting container file '{ContainerFilePath}': {ErrorMessage}", containerFilePath, ex2.Message);
+                    }
+                }
+            _logger.LogWarning("Failed to create container '{ContainerName}' after {RetryCount} attempts.", containerName, 3);
+            return false;
         }
+
         /// <summary>
         /// Creates a new file within a specified container and path.
         /// </summary>
