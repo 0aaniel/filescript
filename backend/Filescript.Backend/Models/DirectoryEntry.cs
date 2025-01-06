@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Text.Json;
 
-namespace Filescript.Models
+namespace Filescript.Backend.Models
 {
     /// <summary>
     /// Represents a directory entry in the container metadata.

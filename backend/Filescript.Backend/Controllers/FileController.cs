@@ -1,4 +1,5 @@
 using Filescript.Backend.Exceptions;
+using Filescript.Backend.Models.RequestModels;
 using Filescript.Backend.Services;
 using Filescript.Models;
 using Microsoft.AspNetCore.Mvc;
@@ -109,7 +110,120 @@ namespace Filescript.Backend.Controllers
             }
         }
 
-        // Define other file-related endpoints as needed
+        [HttpPost("cpin")]
+        public async Task<IActionResult> CopyFileIn(
+            string containerName, 
+            [FromBody] CopyInRequest request)
+        {
+            if (!System.IO.File.Exists(request.ExternalFilePath))
+            {
+                return BadRequest(new { message = $"External file '{request.ExternalFilePath}' does not exist." });
+            }
+
+            try
+            {
+                // 1. Read the external file in chunks
+                // 2. Create a file inside the container with the chunked content
+                const int BUFFER_SIZE = 64 * 1024; // 64 KB chunks, for example
+                byte[] buffer = new byte[BUFFER_SIZE];
+
+                using (FileStream fs = new FileStream(request.ExternalFilePath, FileMode.Open, FileAccess.Read))
+                {
+                    // Instead of reading the whole file in memory, read in chunks
+                    using (MemoryStream ms = new MemoryStream())
+                    {
+                        int bytesRead;
+                        while ((bytesRead = await fs.ReadAsync(buffer, 0, BUFFER_SIZE)) > 0)
+                        {
+                            // Write those bytes to an intermediate MemoryStream
+                            // so we can pass them all at once to CreateFileAsync at the end
+                            // *** If you REALLY want to avoid building the entire file in memory at once,
+                            // you would need a more advanced approach that writes chunk-by-chunk
+                            // to the container. The example below is the simpler approach. ***
+                            await ms.WriteAsync(buffer, 0, bytesRead);
+                        }
+
+                        // We now have the entire file in `ms` as a byte array
+                        byte[] content = ms.ToArray();
+
+                        // 3. Call your existing CreateFileAsync to store the file inside the container
+                        bool result = await _containerManager.CreateFileAsync(
+                            containerName,
+                            request.ContainerFileName,
+                            request.ContainerPath,
+                            content
+                        );
+
+                        if (result)
+                        {
+                            return Ok(new 
+                            { 
+                                message = $"File '{request.ExternalFilePath}' copied to container '{containerName}' as '{request.ContainerFileName}'." 
+                            });
+                        }
+                        else
+                        {
+                            return BadRequest(new { message = "Failed to copy file to container." });
+                        }
+                    }
+                }
+            }
+            catch (ContainerNotFoundException ex)
+            {
+                return NotFound(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "An error occurred while copying file into container: " + ex.Message });
+            }
+        }
+
+        [HttpPost("cpout")]
+        public async Task<IActionResult> CopyFileOut(
+            string containerName,
+            [FromBody] CopyOutRequest request)
+        {
+            try
+            {
+                // 1. Read the file’s content inside the container
+                byte[] content = await _containerManager
+                    .GetFileService(containerName)
+                    .ReadFileAsync(request.ContainerFileName, request.ContainerPath);
+
+                // 2. Write that content to an external file in chunks
+                const int BUFFER_SIZE = 64 * 1024; // 64 KB chunk
+                Directory.CreateDirectory(Path.GetDirectoryName(request.ExternalFilePath));
+
+                using (FileStream fs = new FileStream(request.ExternalFilePath, FileMode.Create, FileAccess.Write))
+                {
+                    // Write in smaller chunks to the external file
+                    int totalBytesWritten = 0;
+                    while (totalBytesWritten < content.Length)
+                    {
+                        int bytesToWrite = Math.Min(BUFFER_SIZE, content.Length - totalBytesWritten);
+                        await fs.WriteAsync(content, totalBytesWritten, bytesToWrite);
+                        totalBytesWritten += bytesToWrite;
+                    }
+                }
+
+                return Ok(new
+                {
+                    message = $"File '{request.ContainerFileName}' from container '{containerName}' copied out to '{request.ExternalFilePath}'."
+                });
+            }
+            catch (Filescript.Backend.Exceptions.FileNotFoundException ex)
+            {
+                return NotFound(new { message = ex.Message });
+            }
+            catch (ContainerNotFoundException ex)
+            {
+                return NotFound(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "An error occurred while copying file out of container: " + ex.Message });
+            }
+        }
     }
 
     public class CreateFileRequest

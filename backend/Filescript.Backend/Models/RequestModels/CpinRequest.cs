@@ -3,15 +3,22 @@ namespace Filescript.Backend.Models.RequestModels
     /// <summary>
     /// Request model for copying a file into the container.
     /// </summary>
-    public class CpinRequest {
+    public class CopyInRequest
+    {
         /// <summary>
-        /// Full path of the source file in the external file system.
+        /// Path to the file on the external file system, e.g. "C:\aaa.txt"
         /// </summary>
-        public required string SourcePath { get; set; }
+        public string ExternalFilePath { get; set; }
 
         /// <summary>
-        /// Name of the destination file within the container.
+        /// The desired name of the file inside the container, e.g. "bbb.txt"
         /// </summary>
-        public required string DestName { get; set; }
+        public string ContainerFileName { get; set; }
+
+        /// <summary>
+        /// (Optional) Path in the container's directory structure, if you are using subdirectories.
+        /// For simplicity, you could store everything at root ("/").
+        /// </summary>
+        public string ContainerPath { get; set; } = "/";
     }
 }

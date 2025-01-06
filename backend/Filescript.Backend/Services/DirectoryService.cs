@@ -5,18 +5,22 @@ using Filescript.Models;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading.Tasks;
 
 namespace Filescript.Backend.Services
 {
     /// <summary>
-    /// Service handling directory operations within a specified container.
+    /// Service handling directory operations within a specified container,
+    /// using multi-block metadata via ContainerManager.
     /// </summary>
     public class DirectoryService : IDirectoryService
     {
         private readonly ILogger<DirectoryService> _logger;
         private readonly ContainerManager _containerManager;
         private readonly string _containerName;
+
+        // These references get set once we load the metadata
         private ContainerMetadata _metadata;
         private FileIOHelper _fileIOHelper;
         private Superblock _superblock;
@@ -29,51 +33,55 @@ namespace Filescript.Backend.Services
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _containerManager = containerManager ?? throw new ArgumentNullException(nameof(containerManager));
             _containerName = containerName ?? throw new ArgumentNullException(nameof(containerName));
+
+            // Initialize metadata synchronously. 
+            // (In a real app, you'd want to avoid async calls in constructor.)
             InitializeMetadata();
         }
 
         /// <summary>
-        /// Initializes metadata, FileIOHelper, and Superblock for the container.
+        /// Initializes metadata, FileIOHelper, and Superblock for the container by calling ContainerManager.
         /// </summary>
-        private async void InitializeMetadata()
+        private void InitializeMetadata()
         {
-            // Retrieve metadata, FileIOHelper, and Superblock from ContainerManager
+            // Retrieve in-memory references
             _metadata = _containerManager.GetContainer(_containerName);
             _fileIOHelper = _containerManager.GetFileIOHelper(_containerName);
             _superblock = _containerManager.GetSuperblock(_containerName);
 
-            // Load metadata from the metadata block
-            byte[] metadataBytes = await _fileIOHelper.ReadBlockAsync(_superblock.MetadataStartBlock);
-            _metadata = ContainerMetadata.Deserialize(metadataBytes);
-        }
-
-        /// <summary>
-        /// Saves the current state of metadata to the metadata block.
-        /// </summary>
-        private async Task SaveMetadata()
-        {
-            try 
+            // Now load the latest multi-block metadata from the container. 
+            // This is an async call, but we'll block to keep constructor synchronous.
+            // Alternatively, you could refactor to use an async factory pattern.
+            try
             {
-                byte[] metadataBytes = _metadata.Serialize();
-                
-                // Create padded array
-                byte[] paddedMetadataBytes = new byte[_superblock.BlockSize];
-                if (metadataBytes.Length > _superblock.BlockSize)
-                {
-                    _logger.LogError("Serialized metadata size ({Size} bytes) exceeds block size ({BlockSize} bytes).", 
-                        metadataBytes.Length, _superblock.BlockSize);
-                    throw new InvalidOperationException($"Metadata size ({metadataBytes.Length} bytes) exceeds block size ({_superblock.BlockSize} bytes)");
-                }
-
-                // Copy metadata bytes to padded array
-                Array.Copy(metadataBytes, paddedMetadataBytes, metadataBytes.Length);
-                
-                await _fileIOHelper.WriteBlockAsync(_superblock.MetadataStartBlock, paddedMetadataBytes);
-                _logger.LogDebug("Directory metadata saved successfully. Size: {Size} bytes", metadataBytes.Length);
+                _metadata = _containerManager.LoadMetadataAsync(_containerName)
+                    .GetAwaiter().GetResult(); 
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to save directory metadata");
+                _logger.LogError(ex, "Error loading metadata in DirectoryService constructor.");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Saves the current state of metadata by delegating to ContainerManager (multi-block),
+        /// instead of manually writing blocks ourselves.
+        /// </summary>
+        private async Task SaveMetadata()
+        {
+            try
+            {
+                // Delegates the entire multi-block write to ContainerManager.
+                await _containerManager.SaveMetadataAsync(_containerName);
+
+                _logger.LogDebug("DirectoryService: Metadata saved successfully for container '{ContainerName}'.",
+                    _containerName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "DirectoryService: Failed to save directory metadata for '{ContainerName}'.", 
+                    _containerName);
                 throw;
             }
         }
@@ -81,8 +89,10 @@ namespace Filescript.Backend.Services
         /// <inheritdoc />
         public async Task<bool> MakeDirectoryAsync(string directoryName, string path)
         {
-            _logger.LogInformation("DirectoryService: Creating directory '{DirectoryName}' at path '{Path}' in container '{ContainerName}'.", 
-                directoryName, path, _containerName);
+            _logger.LogInformation(
+                "DirectoryService: Creating directory '{DirectoryName}' at path '{Path}' in container '{ContainerName}'.",
+                directoryName, path, _containerName
+            );
 
             try
             {
@@ -93,8 +103,15 @@ namespace Filescript.Backend.Services
                 if (string.IsNullOrWhiteSpace(path))
                     throw new ArgumentException("Path cannot be null or whitespace.", nameof(path));
 
-                // Construct the full path
-                string fullPath = System.IO.Path.Combine(path, directoryName).Replace("\\", "/");
+                // Normalize path
+                path = path.Replace("\\", "/");
+                if (!path.StartsWith("/"))
+                    path = "/" + path;
+                if (!path.EndsWith("/"))
+                    path += "/";
+
+                // Construct the full path for the new directory
+                string fullPath = (path + directoryName).Replace("//", "/");
 
                 // Check if directory already exists
                 if (_metadata.Directories.ContainsKey(fullPath))
@@ -104,17 +121,37 @@ namespace Filescript.Backend.Services
                 var directoryEntry = new DirectoryEntry(directoryName, fullPath);
                 _metadata.Directories.Add(fullPath, directoryEntry);
 
-                // Save metadata
+                // Find parent directory
+                string parentPath = path;
+                if (_metadata.Directories.TryGetValue(parentPath, out DirectoryEntry parentDir))
+                {
+                    // Add this directory to parent's subdirectories
+                    if (!parentDir.SubDirectories.Contains(fullPath))
+                    {
+                        parentDir.SubDirectories.Add(fullPath);
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("Parent directory '{ParentPath}' not found. Creating directory without parent.", parentPath);
+                }
+
+                // Save updated metadata
                 await SaveMetadata();
 
-                _logger.LogInformation("DirectoryService: Directory '{DirectoryName}' created successfully at path '{Path}' in container '{ContainerName}'.", 
-                    directoryName, path, _containerName);
+                _logger.LogInformation(
+                    "DirectoryService: Directory '{DirectoryName}' created successfully at path '{Path}' in container '{ContainerName}'.",
+                    directoryName, path, _containerName
+                );
                 return true;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "DirectoryService: Failed to create directory '{DirectoryName}' at path '{Path}' in container '{ContainerName}'", 
-                    directoryName, path, _containerName);
+                _logger.LogError(
+                    ex,
+                    "DirectoryService: Failed to create directory '{DirectoryName}' at path '{Path}' in container '{ContainerName}'",
+                    directoryName, path, _containerName
+                );
                 throw;
             }
         }
@@ -122,7 +159,10 @@ namespace Filescript.Backend.Services
         /// <inheritdoc />
         public async Task<bool> ChangeDirectoryAsync(string targetPath)
         {
-            _logger.LogInformation("DirectoryService: Changing current directory to '{TargetPath}' in container '{ContainerName}'.", targetPath, _containerName);
+            _logger.LogInformation(
+                "DirectoryService: Changing current directory to '{TargetPath}' in container '{ContainerName}'.",
+                targetPath, _containerName
+            );
 
             // Validate input
             if (string.IsNullOrWhiteSpace(targetPath))
@@ -138,17 +178,23 @@ namespace Filescript.Backend.Services
             // Save metadata
             await SaveMetadata();
 
-            _logger.LogInformation("DirectoryService: Current directory changed to '{TargetPath}' in container '{ContainerName}'.", targetPath, _containerName);
+            _logger.LogInformation(
+                "DirectoryService: Current directory changed to '{TargetPath}' in container '{ContainerName}'.",
+                targetPath, _containerName
+            );
             return true;
         }
 
         /// <inheritdoc />
         public async Task<bool> RemoveDirectoryAsync(string directoryName, string path)
         {
-            _logger.LogInformation("DirectoryService: Removing directory '{DirectoryName}' at path '{Path}' in container '{ContainerName}'.", directoryName, path, _containerName);
+            _logger.LogInformation(
+                "DirectoryService: Removing directory '{DirectoryName}' at path '{Path}' in container '{ContainerName}'.",
+                directoryName, path, _containerName
+            );
 
             // Construct the full path
-            string fullPath = System.IO.Path.Combine(path, directoryName).Replace("\\", "/");
+            string fullPath = Path.Combine(path, directoryName).Replace("\\", "/");
 
             // Check if directory exists
             if (!_metadata.Directories.ContainsKey(fullPath))
@@ -157,39 +203,58 @@ namespace Filescript.Backend.Services
             // Remove the directory
             _metadata.Directories.Remove(fullPath);
 
+            // Optionally, remove it from its parent's subdirectories (if you track that):
+            // (Similar logic to MakeDirectoryAsync's "Add" approach.)
+
             // Save metadata
             await SaveMetadata();
 
-            _logger.LogInformation("DirectoryService: Directory '{DirectoryName}' removed successfully from path '{Path}' in container '{ContainerName}'.", directoryName, path, _containerName);
+            _logger.LogInformation(
+                "DirectoryService: Directory '{DirectoryName}' removed successfully from path '{Path}' in container '{ContainerName}'.",
+                directoryName, path, _containerName
+            );
             return true;
         }
 
         /// <inheritdoc />
         public List<DirectoryEntry> ListDirectories()
         {
-            _logger.LogInformation("DirectoryService: Listing directories in container '{ContainerName}'.", _containerName);
-
+            _logger.LogInformation(
+                "DirectoryService: Listing directories in container '{ContainerName}'.",
+                _containerName
+            );
             return new List<DirectoryEntry>(_metadata.Directories.Values);
+        }
+
+        public List<FileEntry> ListFiles()
+        {
+            _logger.LogInformation(
+                "DirectoryService: Listing files in container '{ContainerName}'.",
+                _containerName
+            );
+            return new List<FileEntry>(_metadata.Files.Values);
         }
 
         /// <inheritdoc />
         public string GetCurrentDirectory()
         {
-            _logger.LogInformation("DirectoryService: Getting current directory in container '{ContainerName}'.", _containerName);
-
+            _logger.LogInformation(
+                "DirectoryService: Getting current directory in container '{ContainerName}'.",
+                _containerName
+            );
             return _metadata.CurrentDirectory;
         }
 
         /// <inheritdoc />
         public async Task<bool> BasicHealthCheckAsync()
         {
-            _logger.LogInformation("DirectoryService: Performing basic health check on container '{ContainerName}'.", _containerName);
+            _logger.LogInformation(
+                "DirectoryService: Performing basic health check on container '{ContainerName}'.",
+                _containerName
+            );
 
-            // Implement health check logic as needed
-            // For example, verify that metadata is consistent
-
-            // Placeholder: Assume health check passes
-            return true;
+            // Implement additional health checks if needed
+            return await Task.FromResult(true);
         }
     }
 }

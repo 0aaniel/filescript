@@ -7,8 +7,9 @@ using System.Linq;
 using Filescript.Backend.Exceptions;
 using Filescript.Backend.Models;
 using System.IO.Compression;
+using System.Reflection.PortableExecutable;
 
-namespace Filescript.Models
+namespace Filescript.Backend.Models
 {
     /// <summary>
     /// Represents the metadata of the file system container.
@@ -24,69 +25,31 @@ namespace Filescript.Models
         public long TotalBlocks { get; set; }
         public int BlockSize { get; set; }
 
-        private readonly int _blockSize;
-
-        public ContainerMetadata(int totalBlocks, int blockSize = 4096)
+        public ContainerMetadata(int totalBlocks, int blockSize)
         {
-            _blockSize = blockSize;
+            TotalBlocks = totalBlocks;
+            BlockSize = blockSize;
+
             Directories = new Dictionary<string, DirectoryEntry>(StringComparer.OrdinalIgnoreCase);
             Files = new Dictionary<string, FileEntry>(StringComparer.OrdinalIgnoreCase);
             FreeBlocks = new List<int>();
 
+            for (int i = 1; i < totalBlocks; i++)
+            {
+                FreeBlocks.Add(i);
+            }
+
             // Initialize root directory
             string rootPath = "/";
             var rootDirectory = new DirectoryEntry("root", rootPath);
-            Directories.Add(rootPath, rootDirectory);
-
-            // Reserve blocks 0 and 1 for superblock and metadata
-            for (int i = 0; i < 2; i++)
-            {
-                FreeBlocks.Add(i);
-            }
-
-            // Add remaining blocks to free list
-            for (int i = 2; i < totalBlocks; i++)
-            {
-                FreeBlocks.Add(i);
-            }
+            Directories[rootPath] = rootDirectory;
 
             CurrentDirectory = rootPath;
         }
 
         /// <summary>
-        /// Adds a new directory to the metadata.
+        /// Allocate the first free block from the list (naive).
         /// </summary>
-        public void AddDirectory(DirectoryEntry directory)
-        {
-            if (!Directories.ContainsKey(directory.Path))
-            {
-                Directories.Add(directory.Path, directory);
-            }
-            else
-            {
-                throw new DirectoryAlreadyExistsException($"Directory '{directory.Path}' already exists.");
-            }
-        }
-
-        /// <summary>
-        /// Removes a directory from the metadata.
-        /// </summary>
-        public void RemoveDirectory(string directoryPath)
-        {
-            if (Directories.ContainsKey(directoryPath))
-            {
-                Directories.Remove(directoryPath);
-            }
-            else
-            {
-                throw new Backend.Exceptions.DirectoryNotFoundException($"Directory '{directoryPath}' not found.");
-            }
-        }
-
-        /// <summary>
-        /// Allocates a free block.
-        /// </summary>
-        /// <returns>The index of the allocated block.</returns>
         public int AllocateBlock()
         {
             if (FreeBlocks.Count == 0)
@@ -110,91 +73,62 @@ namespace Filescript.Models
         }
 
         /// <summary>
-        /// Serializes the metadata to a byte array.
+        /// Convert this entire ContainerMetadata to a single JSON string.
+        /// Typically used internally, then we chunk it.
         /// </summary>
-        public byte[] Serialize()
+        public string ToFullJson()
         {
-            var data = new
+            var dto = new
             {
                 ContainerName,
                 ContainerFilePath,
                 TotalBlocks,
                 BlockSize,
                 CurrentDirectory,
-                Files = Files ?? new Dictionary<string, FileEntry>(),
-                Directories = Directories ?? new Dictionary<string, DirectoryEntry>(),
-                FreeBlocks = FreeBlocks ?? new List<int>()
+                Directories,
+                Files,
+                FreeBlocks
             };
 
-            string jsonString = JsonSerializer.Serialize(data);
-            return Encoding.UTF8.GetBytes(jsonString);
+            return JsonSerializer.Serialize(dto);
         }
 
-        public static ContainerMetadata Deserialize(byte[] bytes)
+        /// <summary>
+        /// Rebuild a ContainerMetadata object from a single JSON string.
+        /// </summary>
+        public static ContainerMetadata FromFullJson(string json)
         {
-            // Skip empty or invalid data
-            if (bytes == null || bytes.Length == 0 || bytes.All(b => b == 0))
+            if (string.IsNullOrWhiteSpace(json))
+                throw new ArgumentNullException(nameof(json));
+
+            JsonElement root = JsonSerializer.Deserialize<JsonElement>(json);
+
+            int totalBlocks = root.GetProperty("TotalBlocks").GetInt32();
+            int blockSize   = root.GetProperty("BlockSize").GetInt32();
+            var meta        = new ContainerMetadata(totalBlocks, blockSize)
             {
-                return new ContainerMetadata(1, 4096); // Default values
+                ContainerName     = root.GetProperty("ContainerName").GetString(),
+                ContainerFilePath = root.GetProperty("ContainerFilePath").GetString(),
+                CurrentDirectory  = root.GetProperty("CurrentDirectory").GetString()
+            };
+
+            if (root.TryGetProperty("Directories", out JsonElement dirsElem))
+            {
+                meta.Directories = JsonSerializer
+                    .Deserialize<Dictionary<string, DirectoryEntry>>(dirsElem.GetRawText());
+            }
+            if (root.TryGetProperty("Files", out JsonElement filesElem))
+            {
+                meta.Files = JsonSerializer
+                    .Deserialize<Dictionary<string, FileEntry>>(filesElem.GetRawText());
+            }
+            if (root.TryGetProperty("FreeBlocks", out JsonElement freeElem))
+            {
+                meta.FreeBlocks = JsonSerializer
+                    .Deserialize<List<int>>(freeElem.GetRawText());
             }
 
-            try
-            {
-                // Remove trailing zeros if any
-                int lastNonZeroIndex = Array.FindLastIndex(bytes, b => b != 0);
-                if (lastNonZeroIndex >= 0)
-                {
-                    bytes = bytes.Take(lastNonZeroIndex + 1).ToArray();
-                }
-
-                string jsonString = Encoding.UTF8.GetString(bytes).TrimEnd('\0');
-                var data = JsonSerializer.Deserialize<JsonElement>(jsonString);
-
-                var metadata = new ContainerMetadata(
-                    data.GetProperty("TotalBlocks").GetInt32(),
-                    data.GetProperty("BlockSize").GetInt32()
-                )
-                {
-                    ContainerName = data.GetProperty("ContainerName").GetString(),
-                    ContainerFilePath = data.GetProperty("ContainerFilePath").GetString(),
-                    CurrentDirectory = data.GetProperty("CurrentDirectory").GetString()
-                };
-
-                // Add error handling for optional properties
-                if (data.TryGetProperty("Files", out JsonElement filesElement))
-                {
-                    metadata.Files = JsonSerializer.Deserialize<Dictionary<string, FileEntry>>(filesElement.GetRawText());
-                }
-
-                if (data.TryGetProperty("Directories", out JsonElement directoriesElement))
-                {
-                    metadata.Directories = JsonSerializer.Deserialize<Dictionary<string, DirectoryEntry>>(directoriesElement.GetRawText());
-                }
-
-                if (data.TryGetProperty("FreeBlocks", out JsonElement freeBlocksElement))
-                {
-                    metadata.FreeBlocks = JsonSerializer.Deserialize<List<int>>(freeBlocksElement.GetRawText());
-                }
-
-                return metadata;
-            }
-            catch (Exception)
-            {
-                // If deserialization fails, return a new metadata instance
-                return new ContainerMetadata(1, 4096);
-            }
+            return meta;
         }
-    }
-
-    /// <summary>
-    /// Data Transfer Object for ContainerMetadata serialization.
-    /// </summary>
-    public class ContainerMetadataDto
-    {
-        public Dictionary<string, DirectoryEntry> Directories { get; set; }
-        public Dictionary<string, FileEntry> Files { get; set; }
-        public int[] FreeBlockBitmap { get; set; }
-        public string CurrentDirectory { get; set; }
-        public string ContainerFilePath { get; set; } // Added property
     }
 }
